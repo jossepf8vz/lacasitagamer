@@ -586,9 +586,9 @@ const CATEGORIES = [
 
 export default function App() {
   // Tasas Financieras
-  const [bcvRate] = useState(894.88);
+  const [bcvRate, setBcvRate] = useState<number | null>(null);
+  const [bcvRateError, setBcvRateError] = useState<string | null>(null);
   const [binanceP2PRate] = useState(1050.25);
-  const [useRealP2PCoverage] = useState(true);
 
   // Navegación e Interfaz PWA
   const [cart, setCart] = useState([]);
@@ -697,15 +697,60 @@ export default function App() {
     return () => clearInterval(timer);
   }, [heroItems.length]);
 
-  const bsfCoverageFactor = useMemo(() => binanceP2PRate / bcvRate, [binanceP2PRate, bcvRate]);
+  useEffect(() => {
+    const controller = new AbortController();
+
+    const fetchBcvRate = async () => {
+      try {
+        const response = await fetch('https://ve.dolarapi.com/v1/dolares/oficial', {
+          cache: 'no-store',
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          throw new Error(`La API BCV respondió con el estado ${response.status}.`);
+        }
+
+        const data: unknown = await response.json();
+        if (typeof data !== 'object' || data === null || !('promedio' in data)) {
+          throw new Error('La respuesta de la API BCV no contiene una tasa válida.');
+        }
+
+        const rate = data.promedio;
+        if (typeof rate !== 'number' || !Number.isFinite(rate) || rate <= 0) {
+          throw new Error('La respuesta de la API BCV no contiene una tasa válida.');
+        }
+
+        setBcvRate(rate);
+        setBcvRateError(null);
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        setBcvRateError(error instanceof Error ? error.message : 'No se pudo consultar la tasa BCV.');
+      }
+    };
+
+    void fetchBcvRate();
+    const refreshTimer = setInterval(() => {
+      void fetchBcvRate();
+    }, 15 * 60 * 1000);
+
+    return () => {
+      controller.abort();
+      clearInterval(refreshTimer);
+    };
+  }, []);
+
+  const bsfCoverageFactor = useMemo(
+    () => (bcvRate === null ? null : binanceP2PRate / bcvRate),
+    [binanceP2PRate, bcvRate]
+  );
 
   const calculateBsNumeric = (priceUsd) => {
-    const effectiveUsd = useRealP2PCoverage ? priceUsd * bsfCoverageFactor : priceUsd;
-    return effectiveUsd * bcvRate;
+    return bcvRate === null ? null : priceUsd * bcvRate;
   };
 
   const calculateBs = (priceUsd) => {
     const totalBs = calculateBsNumeric(priceUsd);
+    if (totalBs === null) return '—';
     return new Intl.NumberFormat('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(totalBs);
   };
 
@@ -889,7 +934,12 @@ export default function App() {
           <div className="flex items-center gap-2">
             <span className="flex h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
             <span className="text-purple-300 font-semibold">Tasa Oficial BCV:</span> 
-            <span className="text-white font-bold font-mono">1 USD = {bcvRate.toFixed(2)} Bs.</span>
+            <span className="text-white font-bold font-mono" aria-live="polite" title={bcvRateError ?? undefined}>
+              {bcvRate === null ? (bcvRateError ? 'No disponible' : 'Consultando...') : `1 USD = ${bcvRate.toFixed(2)} Bs.`}
+            </span>
+            {bcvRate !== null && bcvRateError && (
+              <span className="text-amber-300" title={bcvRateError}> (desactualizada)</span>
+            )}
             <span className="text-slate-500 hidden sm:inline">|</span>
             <span className="text-cyan-300 font-semibold hidden sm:inline">Binance P2P:</span>
             <span className="text-cyan-400 font-bold font-mono hidden sm:inline">{binanceP2PRate.toFixed(2)} Bs.</span>
@@ -1100,7 +1150,9 @@ export default function App() {
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-1">
                     <p className="text-xs text-slate-400">Tasa Oficial BCV</p>
-                    <p className="text-xl font-bold font-mono text-white">{bcvRate.toFixed(2)} Bs.</p>
+                    <p className="text-xl font-bold font-mono text-white">
+                      {bcvRate === null ? (bcvRateError ? 'No disponible' : 'Consultando...') : `${bcvRate.toFixed(2)} Bs.`}
+                    </p>
                   </div>
                   <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-1">
                     <p className="text-xs text-slate-400">Tasa Binance P2P</p>
@@ -1108,7 +1160,9 @@ export default function App() {
                   </div>
                   <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-1">
                     <p className="text-xs text-slate-400">Factor Cobertura Brecha</p>
-                    <p className="text-xl font-bold font-mono text-purple-400">+{((bsfCoverageFactor - 1) * 100).toFixed(1)}%</p>
+                    <p className="text-xl font-bold font-mono text-purple-400">
+                      {bsfCoverageFactor === null ? '—' : `+${((bsfCoverageFactor - 1) * 100).toFixed(1)}%`}
+                    </p>
                   </div>
                 </div>
               </div>
