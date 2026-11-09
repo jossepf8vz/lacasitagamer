@@ -580,11 +580,11 @@ const CATEGORIES = [
   { name: 'Clásicos', icon: Cpu, color: 'from-emerald-500 to-green-600' }
 ];
 
-const SOCIAL_PROOF_ACTIVITIES = [
-  { buyer: 'Carlos M.', gameId: 'g-steam-20', variantId: 'v-s20-glo', icon: '🔥' },
-  { buyer: 'José R.', gameId: 'g-xbox-20', variantId: 'v-x20-us', icon: '🎮' },
-  { buyer: 'Andrea P.', gameId: 'g-psn-25', variantId: 'v-ps25-us', icon: '✨' },
-  { buyer: 'Luis F.', gameId: 'g-nin-50', variantId: 'v-n50-us', icon: '🕹️' }
+const FEATURED_OFFERS = [
+  { gameId: 'g-steam-20', variantId: 'v-s20-glo', icon: '🔥', headline: '¡Compra en Oferta!' },
+  { gameId: 'g-xbox-20', variantId: 'v-x20-us', icon: '🎮', headline: 'Oferta gamer destacada' },
+  { gameId: 'g-psn-25', variantId: 'v-ps25-us', icon: '✨', headline: '¡Aprovecha esta oferta!' },
+  { gameId: 'g-nin-50', variantId: 'v-n50-us', icon: '🕹️', headline: 'Oferta gamer destacada' }
 ];
 
 function RecentActivityNotification({
@@ -593,27 +593,43 @@ function RecentActivityNotification({
   onProductClick: (gameId: string) => void;
 }) {
   const [activityIndex, setActivityIndex] = useState(0);
-  const [isVisible, setIsVisible] = useState(true);
+  const [isVisible, setIsVisible] = useState(false);
 
   useEffect(() => {
-    let transitionTimer: ReturnType<typeof setTimeout>;
-    const rotationTimer = setInterval(() => {
-      setIsVisible(false);
-      transitionTimer = setTimeout(() => {
-        setActivityIndex((index) => (index + 1) % SOCIAL_PROOF_ACTIVITIES.length);
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    let nextOfferIndex = 2;
+    let rotationTimer: ReturnType<typeof setTimeout>;
+
+    const scheduleOffer = (index: number, delay: number) => {
+      timers.push(setTimeout(() => {
+        setActivityIndex(index);
         setIsVisible(true);
-      }, 350);
-    }, 6000);
+        timers.push(setTimeout(() => setIsVisible(false), 8000));
+      }, delay));
+    };
+
+    const rotateOffer = () => {
+      scheduleOffer(nextOfferIndex, 0);
+      nextOfferIndex = (nextOfferIndex + 1) % FEATURED_OFFERS.length;
+      rotationTimer = setTimeout(rotateOffer, 105000);
+    };
+
+    scheduleOffer(0, 5000);
+    scheduleOffer(1, 55000);
+    const firstRotationTimer = setTimeout(() => {
+      rotateOffer();
+    }, 160000);
 
     return () => {
-      clearInterval(rotationTimer);
-      clearTimeout(transitionTimer);
+      timers.forEach(clearTimeout);
+      clearTimeout(firstRotationTimer);
+      clearTimeout(rotationTimer);
     };
   }, []);
 
-  const activity = SOCIAL_PROOF_ACTIVITIES[activityIndex];
-  const game = MOCK_GAMES.find((item) => item.id === activity.gameId);
-  const variant = game?.variants.find((item) => item.id === activity.variantId);
+  const offer = FEATURED_OFFERS[activityIndex];
+  const game = MOCK_GAMES.find((item) => item.id === offer.gameId);
+  const variant = game?.variants.find((item) => item.id === offer.variantId);
 
   if (!game || !variant) {
     return null;
@@ -621,9 +637,9 @@ function RecentActivityNotification({
 
   return (
     <aside
-      aria-label="Actividad de demostración"
+      aria-label="Ofertas destacadas"
       aria-live="polite"
-      className={`fixed bottom-20 left-4 z-30 w-[min(22rem,calc(100vw-2rem))] md:bottom-6 md:left-6 transition-all duration-300 ease-out motion-reduce:transition-none ${
+      className={`fixed bottom-4 left-4 z-50 w-[min(22rem,calc(100vw-2rem))] transition-all duration-300 ease-out motion-reduce:transition-none ${
         isVisible ? 'translate-y-0 opacity-100' : 'translate-y-3 opacity-0'
       }`}
     >
@@ -631,19 +647,17 @@ function RecentActivityNotification({
         type="button"
         onClick={() => onProductClick(game.id)}
         className="w-full rounded-2xl border border-purple-400/30 bg-slate-950/90 p-3 text-left shadow-xl shadow-purple-950/40 backdrop-blur-xl transition hover:border-purple-400/70 hover:bg-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-400"
-        aria-label={`Actividad simulada: ${activity.buyer}, ${game.title}, plataforma ${variant.platform}. Ir al producto.`}
+        aria-label={`${offer.headline} ${game.title}, plataforma ${variant.platform}. Ir al producto.`}
       >
         <span className="mb-1.5 flex items-center gap-1.5 text-[9px] font-black uppercase tracking-wider text-purple-300">
-          <Activity className="h-3 w-3 text-cyan-300" />
-          Ejemplo · actividad simulada
+          <Flame className="h-3 w-3 text-cyan-300" />
+          {offer.headline}
         </span>
         <span className="flex items-start gap-2 text-xs leading-relaxed text-slate-200">
-          <span aria-hidden="true" className="text-sm">{activity.icon}</span>
+          <span aria-hidden="true" className="text-sm">{offer.icon}</span>
           <span>
-            <strong className="text-white">{activity.buyer}</strong>
-            {' seleccionó '}
             <strong className="text-cyan-200">{game.title}</strong>
-            <span className="block text-[11px] text-slate-400">{variant.platform}</span>
+            <span className="text-slate-400"> ({variant.platform})</span>
           </span>
         </span>
       </button>
