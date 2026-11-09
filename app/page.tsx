@@ -1,5 +1,6 @@
 'use client';
 import React, { useState, useEffect, useMemo } from 'react';
+import { getSupabaseBrowserClient } from '../lib/supabase/browser';
 import { 
   ShoppingCart, Search, Tag, Gamepad2, ShieldCheck, Flame, 
   Sparkles, Filter, X, Home, ShoppingBag, User, 
@@ -24,7 +25,7 @@ const MOCK_GAMES = [
     tag: "POPULAR",
     priceHistory30d: { lowest: 10.20, highest: 11.50, isLowest30d: true },
     variants: [
-      { id: "v-s10-glo", platform: "PC (Steam)", region: "Global", supplierCostUsd: 9.80, priceUsd: 10.99, stock: 45, g2aPriceUsd: 9.95, enebaPriceUsd: 9.80 }
+      { id: "v-s10-glo", platform: "PC (Steam)", region: "Global", priceUsd: 10.99, stock: 45 }
     ]
   },
   {
@@ -39,7 +40,7 @@ const MOCK_GAMES = [
     tag: "MÁS VENDIDO",
     priceHistory30d: { lowest: 20.50, highest: 23.00, isLowest30d: false },
     variants: [
-      { id: "v-s20-glo", platform: "PC (Steam)", region: "Global", supplierCostUsd: 19.50, priceUsd: 21.50, stock: 120, g2aPriceUsd: 19.90, enebaPriceUsd: 19.50 }
+      { id: "v-s20-glo", platform: "PC (Steam)", region: "Global", priceUsd: 21.50, stock: 120 }
     ]
   },
   {
@@ -51,7 +52,7 @@ const MOCK_GAMES = [
     description: "Añade $50 USD inmediatamente a tu monedero oficial de Steam.",
     priceHistory30d: { lowest: 51.00, highest: 55.00, isLowest30d: true },
     variants: [
-      { id: "v-s50-glo", platform: "PC (Steam)", region: "Global", supplierCostUsd: 48.90, priceUsd: 52.99, stock: 30, g2aPriceUsd: 49.20, enebaPriceUsd: 48.90 }
+      { id: "v-s50-glo", platform: "PC (Steam)", region: "Global", priceUsd: 52.99, stock: 30 }
     ]
   },
   {
@@ -63,7 +64,7 @@ const MOCK_GAMES = [
     description: "Tarjeta prepagada de $10 USD para cuentas PlayStation Store Estados Unidos.",
     priceHistory30d: { lowest: 9.99, highest: 11.20, isLowest30d: false },
     variants: [
-      { id: "v-ps10-us", platform: "PlayStation 5", region: "US Store", supplierCostUsd: 9.20, priceUsd: 10.50, stock: 80, g2aPriceUsd: 9.50, enebaPriceUsd: 9.20 }
+      { id: "v-ps10-us", platform: "PlayStation 5", region: "US Store", priceUsd: 10.50, stock: 80 }
     ]
   },
   {
@@ -78,7 +79,7 @@ const MOCK_GAMES = [
     tag: "OFERTA TOP",
     priceHistory30d: { lowest: 24.99, highest: 27.50, isLowest30d: true },
     variants: [
-      { id: "v-ps25-us", platform: "PlayStation 5", region: "US Store", supplierCostUsd: 23.50, priceUsd: 25.99, stock: 65, g2aPriceUsd: 23.90, enebaPriceUsd: 23.50 }
+      { id: "v-ps25-us", platform: "PlayStation 5", region: "US Store", priceUsd: 25.99, stock: 65 }
     ]
   },
   {
@@ -90,7 +91,7 @@ const MOCK_GAMES = [
     description: "Gift Card de $50 USD para PlayStation 4 y PlayStation 5 en la eStore de EE.UU.",
     priceHistory30d: { lowest: 49.99, highest: 54.00, isLowest30d: false },
     variants: [
-      { id: "v-ps50-us", platform: "PlayStation 5", region: "US Store", supplierCostUsd: 46.80, priceUsd: 51.50, stock: 40, g2aPriceUsd: 47.10, enebaPriceUsd: 46.80 }
+      { id: "v-ps50-us", platform: "PlayStation 5", region: "US Store", priceUsd: 51.50, stock: 40 }
     ]
   },
   {
@@ -102,7 +103,7 @@ const MOCK_GAMES = [
     description: "Añade saldo eShop a tu Nintendo Switch para comprar juegos indies y expansiones.",
     priceHistory30d: { lowest: 10.50, highest: 11.80, isLowest30d: true },
     variants: [
-      { id: "v-n10-us", platform: "Nintendo Switch", region: "US Store", supplierCostUsd: 9.30, priceUsd: 10.75, stock: 25, g2aPriceUsd: 9.60, enebaPriceUsd: 9.30 }
+      { id: "v-n10-us", platform: "Nintendo Switch", region: "US Store", priceUsd: 10.75, stock: 25 }
     ]
   },
   {
@@ -114,7 +115,7 @@ const MOCK_GAMES = [
     description: "Saldo digital de $20 USD para la eShop oficial de Nintendo.",
     priceHistory30d: { lowest: 20.00, highest: 22.50, isLowest30d: false },
     variants: [
-      { id: "v-n20-us", platform: "Nintendo Switch", region: "US Store", supplierCostUsd: 18.90, priceUsd: 21.00, stock: 35, g2aPriceUsd: 19.10, enebaPriceUsd: 18.90 }
+      { id: "v-n20-us", platform: "Nintendo Switch", region: "US Store", priceUsd: 21.00, stock: 35 }
     ]
   },
   {
@@ -126,7 +127,7 @@ const MOCK_GAMES = [
     description: "Gift Card de $50 USD para descargas directas en tu Nintendo Switch.",
     priceHistory30d: { lowest: 50.50, highest: 56.00, isLowest30d: true },
     variants: [
-      { id: "v-n50-us", platform: "Nintendo Switch", region: "US Store", supplierCostUsd: 47.00, priceUsd: 52.00, stock: 15, g2aPriceUsd: 47.80, enebaPriceUsd: 47.00 }
+      { id: "v-n50-us", platform: "Nintendo Switch", region: "US Store", priceUsd: 52.00, stock: 15 }
     ]
   },
   {
@@ -138,7 +139,7 @@ const MOCK_GAMES = [
     description: "Válida para consolas Xbox One, Xbox Series X/S y tienda Windows PC.",
     priceHistory30d: { lowest: 19.99, highest: 22.00, isLowest30d: false },
     variants: [
-      { id: "v-x20-us", platform: "Multiplataforma", region: "US Store", supplierCostUsd: 18.80, priceUsd: 20.99, stock: 30, g2aPriceUsd: 19.00, enebaPriceUsd: 18.80 }
+      { id: "v-x20-us", platform: "Multiplataforma", region: "US Store", priceUsd: 20.99, stock: 30 }
     ]
   },
   {
@@ -150,7 +151,7 @@ const MOCK_GAMES = [
     description: "Canjeable en la App Store para compras de juegos en iOS e iCloud.",
     priceHistory30d: { lowest: 15.20, highest: 17.50, isLowest30d: false },
     variants: [
-      { id: "v-ap15-us", platform: "Multiplataforma", region: "US Store", supplierCostUsd: 14.10, priceUsd: 15.99, stock: 50, g2aPriceUsd: 14.50, enebaPriceUsd: 14.10 }
+      { id: "v-ap15-us", platform: "Multiplataforma", region: "US Store", priceUsd: 15.99, stock: 50 }
     ]
   },
   {
@@ -162,7 +163,7 @@ const MOCK_GAMES = [
     description: "Recarga tu saldo de Google Play Store para juegos y apps en Android.",
     priceHistory30d: { lowest: 10.20, highest: 11.90, isLowest30d: true },
     variants: [
-      { id: "v-gp10-us", platform: "Multiplataforma", region: "US Store", supplierCostUsd: 9.30, priceUsd: 10.99, stock: 40, g2aPriceUsd: 9.50, enebaPriceUsd: 9.30 }
+      { id: "v-gp10-us", platform: "Multiplataforma", region: "US Store", priceUsd: 10.99, stock: 40 }
     ]
   },
 
@@ -177,7 +178,7 @@ const MOCK_GAMES = [
     tag: "POPULAR",
     priceHistory30d: { lowest: 8.99, highest: 10.50, isLowest30d: true },
     variants: [
-      { id: "v-fn1000-glo", platform: "Multiplataforma", region: "Global", supplierCostUsd: 7.90, priceUsd: 9.50, stock: 150, g2aPriceUsd: 8.10, enebaPriceUsd: 7.90 }
+      { id: "v-fn1000-glo", platform: "Multiplataforma", region: "Global", priceUsd: 9.50, stock: 150 }
     ]
   },
   {
@@ -189,7 +190,7 @@ const MOCK_GAMES = [
     description: "Paquete de 2,800 Pavos con ahorro adicional para la tienda de Fortnite.",
     priceHistory30d: { lowest: 21.99, highest: 24.50, isLowest30d: false },
     variants: [
-      { id: "v-fn2800-glo", platform: "Multiplataforma", region: "Global", supplierCostUsd: 19.80, priceUsd: 22.99, stock: 85, g2aPriceUsd: 20.20, enebaPriceUsd: 19.80 }
+      { id: "v-fn2800-glo", platform: "Multiplataforma", region: "Global", priceUsd: 22.99, stock: 85 }
     ]
   },
   {
@@ -201,7 +202,7 @@ const MOCK_GAMES = [
     description: "Paquete masivo de 5,000 PaVos activable en Epic Games.",
     priceHistory30d: { lowest: 34.00, highest: 38.00, isLowest30d: true },
     variants: [
-      { id: "v-fn5000-glo", platform: "Multiplataforma", region: "Global", supplierCostUsd: 31.00, priceUsd: 35.99, stock: 40, g2aPriceUsd: 31.50, enebaPriceUsd: 31.00 }
+      { id: "v-fn5000-glo", platform: "Multiplataforma", region: "Global", priceUsd: 35.99, stock: 40 }
     ]
   },
   {
@@ -213,7 +214,7 @@ const MOCK_GAMES = [
     description: "Puntos de Valorant para adquirir skins de armas en la tienda del juego.",
     priceHistory30d: { lowest: 10.49, highest: 12.00, isLowest30d: false },
     variants: [
-      { id: "v-vp1000-us", platform: "PC (Steam)", region: "US Store", supplierCostUsd: 9.10, priceUsd: 10.99, stock: 60, g2aPriceUsd: 9.30, enebaPriceUsd: 9.10 }
+      { id: "v-vp1000-us", platform: "PC (Steam)", region: "US Store", priceUsd: 10.99, stock: 60 }
     ]
   },
   {
@@ -225,7 +226,7 @@ const MOCK_GAMES = [
     description: "2,050 Valorant Points para desbloquear paquetes de skins exclusivas.",
     priceHistory30d: { lowest: 20.99, highest: 23.50, isLowest30d: true },
     variants: [
-      { id: "v-vp2050-us", platform: "PC (Steam)", region: "US Store", supplierCostUsd: 18.20, priceUsd: 21.50, stock: 35, g2aPriceUsd: 18.60, enebaPriceUsd: 18.20 }
+      { id: "v-vp2050-us", platform: "PC (Steam)", region: "US Store", priceUsd: 21.50, stock: 35 }
     ]
   },
   {
@@ -237,7 +238,7 @@ const MOCK_GAMES = [
     description: "Tarjeta de regalo oficial de 800 Robux para accesorios y ventajas.",
     priceHistory30d: { lowest: 9.99, highest: 11.50, isLowest30d: false },
     variants: [
-      { id: "v-rb800-glo", platform: "Multiplataforma", region: "Global", supplierCostUsd: 8.90, priceUsd: 10.49, stock: 110, g2aPriceUsd: 9.10, enebaPriceUsd: 8.90 }
+      { id: "v-rb800-glo", platform: "Multiplataforma", region: "Global", priceUsd: 10.49, stock: 110 }
     ]
   },
   {
@@ -249,7 +250,7 @@ const MOCK_GAMES = [
     description: "Código de 2,000 Robux para cuenta personal de Roblox.",
     priceHistory30d: { lowest: 24.50, highest: 28.00, isLowest30d: true },
     variants: [
-      { id: "v-rb2000-glo", platform: "Multiplataforma", region: "Global", supplierCostUsd: 22.00, priceUsd: 25.99, stock: 45, g2aPriceUsd: 22.40, enebaPriceUsd: 22.00 }
+      { id: "v-rb2000-glo", platform: "Multiplataforma", region: "Global", priceUsd: 25.99, stock: 45 }
     ]
   },
   {
@@ -261,8 +262,8 @@ const MOCK_GAMES = [
     description: "Puntos para Ultimate Team (FUT Packs y Ultimate Drafts).",
     priceHistory30d: { lowest: 9.50, highest: 11.20, isLowest30d: false },
     variants: [
-      { id: "v-fcp1050-pc", platform: "PC (Steam)", region: "Global", supplierCostUsd: 8.80, priceUsd: 9.99, stock: 50, g2aPriceUsd: 8.95, enebaPriceUsd: 8.80 },
-      { id: "v-fcp1050-ps", platform: "PlayStation 5", region: "US Store", supplierCostUsd: 8.90, priceUsd: 10.49, stock: 40, g2aPriceUsd: 9.10, enebaPriceUsd: 8.90 }
+      { id: "v-fcp1050-pc", platform: "PC (Steam)", region: "Global", priceUsd: 9.99, stock: 50 },
+      { id: "v-fcp1050-ps", platform: "PlayStation 5", region: "US Store", priceUsd: 10.49, stock: 40 }
     ]
   },
   {
@@ -274,7 +275,7 @@ const MOCK_GAMES = [
     description: "Puntos Riot RP canjeables en servidor NA y LAN.",
     priceHistory30d: { lowest: 10.50, highest: 12.00, isLowest30d: true },
     variants: [
-      { id: "v-lol1380-glo", platform: "PC (Steam)", region: "Global", supplierCostUsd: 9.50, priceUsd: 10.99, stock: 30, g2aPriceUsd: 9.70, enebaPriceUsd: 9.50 }
+      { id: "v-lol1380-glo", platform: "PC (Steam)", region: "Global", priceUsd: 10.99, stock: 30 }
     ]
   },
   {
@@ -286,8 +287,8 @@ const MOCK_GAMES = [
     description: "2,400 COD Points para Warzone y Black Ops 6.",
     priceHistory30d: { lowest: 19.50, highest: 22.00, isLowest30d: false },
     variants: [
-      { id: "v-cp2400-pc", platform: "PC (Steam)", region: "Global", supplierCostUsd: 17.50, priceUsd: 19.99, stock: 25, g2aPriceUsd: 17.90, enebaPriceUsd: 17.50 },
-      { id: "v-cp2400-ps", platform: "PlayStation 5", region: "US Store", supplierCostUsd: 18.00, priceUsd: 20.99, stock: 30, g2aPriceUsd: 18.40, enebaPriceUsd: 18.00 }
+      { id: "v-cp2400-pc", platform: "PC (Steam)", region: "Global", priceUsd: 19.99, stock: 25 },
+      { id: "v-cp2400-ps", platform: "PlayStation 5", region: "US Store", priceUsd: 20.99, stock: 30 }
     ]
   },
   {
@@ -300,7 +301,7 @@ const MOCK_GAMES = [
     tag: "NUEVO",
     priceHistory30d: { lowest: 9.99, highest: 12.00, isLowest30d: true },
     variants: [
-      { id: "v-ff1080-glo", platform: "Multiplataforma", region: "Global", supplierCostUsd: 8.90, priceUsd: 10.50, stock: 100, g2aPriceUsd: 9.10, enebaPriceUsd: 8.90 }
+      { id: "v-ff1080-glo", platform: "Multiplataforma", region: "Global", priceUsd: 10.50, stock: 100 }
     ]
   },
 
@@ -314,7 +315,7 @@ const MOCK_GAMES = [
     description: "Acceso al multijugador online y 3 juegos mensuales en PS4 / PS5.",
     priceHistory30d: { lowest: 9.20, highest: 11.00, isLowest30d: false },
     variants: [
-      { id: "v-psess1m-us", platform: "PlayStation 5", region: "US Store", supplierCostUsd: 8.50, priceUsd: 9.99, stock: 40, g2aPriceUsd: 8.80, enebaPriceUsd: 8.50 }
+      { id: "v-psess1m-us", platform: "PlayStation 5", region: "US Store", priceUsd: 9.99, stock: 40 }
     ]
   },
   {
@@ -326,7 +327,7 @@ const MOCK_GAMES = [
     description: "Incluye catálogo de cientos de juegos de PS4 y PS5 para descargar.",
     priceHistory30d: { lowest: 14.50, highest: 16.99, isLowest30d: true },
     variants: [
-      { id: "v-psext1m-us", platform: "PlayStation 5", region: "US Store", supplierCostUsd: 13.00, priceUsd: 14.99, stock: 25, g2aPriceUsd: 13.40, enebaPriceUsd: 13.00 }
+      { id: "v-psext1m-us", platform: "PlayStation 5", region: "US Store", priceUsd: 14.99, stock: 25 }
     ]
   },
   {
@@ -338,7 +339,7 @@ const MOCK_GAMES = [
     description: "Catálogo completo, juegos clásicos y pruebas exclusivas de juegos.",
     priceHistory30d: { lowest: 37.99, highest: 42.00, isLowest30d: true },
     variants: [
-      { id: "v-psdel3m-us", platform: "PlayStation 5", region: "US Store", supplierCostUsd: 34.00, priceUsd: 38.99, stock: 15, g2aPriceUsd: 34.80, enebaPriceUsd: 34.00 }
+      { id: "v-psdel3m-us", platform: "PlayStation 5", region: "US Store", priceUsd: 38.99, stock: 15 }
     ]
   },
   {
@@ -350,7 +351,7 @@ const MOCK_GAMES = [
     description: "Mejora tu perfil con emojis personalizados, transmisión HD y 2 Server Boosts.",
     priceHistory30d: { lowest: 9.50, highest: 11.00, isLowest30d: false },
     variants: [
-      { id: "v-nitro1m-glo", platform: "Multiplataforma", region: "Global", supplierCostUsd: 8.20, priceUsd: 9.99, stock: 50, g2aPriceUsd: 8.50, enebaPriceUsd: 8.20 }
+      { id: "v-nitro1m-glo", platform: "Multiplataforma", region: "Global", priceUsd: 9.99, stock: 50 }
     ]
   },
   {
@@ -365,7 +366,7 @@ const MOCK_GAMES = [
     tag: "IMPERDIBLE",
     priceHistory30d: { lowest: 14.99, highest: 18.00, isLowest30d: true },
     variants: [
-      { id: "v-gpu1m-glo", platform: "Multiplataforma", region: "Global", supplierCostUsd: 13.50, priceUsd: 15.99, stock: 70, g2aPriceUsd: 13.90, enebaPriceUsd: 13.50 }
+      { id: "v-gpu1m-glo", platform: "Multiplataforma", region: "Global", priceUsd: 15.99, stock: 70 }
     ]
   },
 
@@ -382,9 +383,9 @@ const MOCK_GAMES = [
     tag: "NUEVO",
     priceHistory30d: { lowest: 47.99, highest: 59.99, isLowest30d: true },
     variants: [
-      { id: "v-fc26-pc", platform: "PC (Steam)", region: "Global", supplierCostUsd: 45.00, priceUsd: 49.99, stock: 35, g2aPriceUsd: 46.20, enebaPriceUsd: 45.00 },
-      { id: "v-fc26-ps", platform: "PlayStation 5", region: "US Store", supplierCostUsd: 55.00, priceUsd: 59.99, stock: 20, g2aPriceUsd: 56.10, enebaPriceUsd: 55.00 },
-      { id: "v-fc26-nin", platform: "Nintendo Switch", region: "US Store", supplierCostUsd: 40.00, priceUsd: 44.99, stock: 15, g2aPriceUsd: 41.00, enebaPriceUsd: 40.00 }
+      { id: "v-fc26-pc", platform: "PC (Steam)", region: "Global", priceUsd: 49.99, stock: 35 },
+      { id: "v-fc26-ps", platform: "PlayStation 5", region: "US Store", priceUsd: 59.99, stock: 20 },
+      { id: "v-fc26-nin", platform: "Nintendo Switch", region: "US Store", priceUsd: 44.99, stock: 15 }
     ]
   },
   {
@@ -397,8 +398,8 @@ const MOCK_GAMES = [
     tag: "OFERTA TOP",
     priceHistory30d: { lowest: 13.99, highest: 17.50, isLowest30d: false },
     variants: [
-      { id: "v-gtav-pc", platform: "PC (Steam)", region: "Global", supplierCostUsd: 12.00, priceUsd: 14.50, stock: 90, g2aPriceUsd: 12.80, enebaPriceUsd: 12.00 },
-      { id: "v-gtav-ps", platform: "PlayStation 5", region: "US Store", supplierCostUsd: 15.00, priceUsd: 18.99, stock: 40, g2aPriceUsd: 15.60, enebaPriceUsd: 15.00 }
+      { id: "v-gtav-pc", platform: "PC (Steam)", region: "Global", priceUsd: 14.50, stock: 90 },
+      { id: "v-gtav-ps", platform: "PlayStation 5", region: "US Store", priceUsd: 18.99, stock: 40 }
     ]
   },
   {
@@ -413,8 +414,8 @@ const MOCK_GAMES = [
     tag: "GOTY CANDIDATE",
     priceHistory30d: { lowest: 52.99, highest: 59.99, isLowest30d: true },
     variants: [
-      { id: "v-wukong-pc", platform: "PC (Steam)", region: "Global", supplierCostUsd: 48.00, priceUsd: 54.99, stock: 30, g2aPriceUsd: 49.50, enebaPriceUsd: 48.00 },
-      { id: "v-wukong-ps", platform: "PlayStation 5", region: "US Store", supplierCostUsd: 54.00, priceUsd: 59.99, stock: 18, g2aPriceUsd: 55.20, enebaPriceUsd: 54.00 }
+      { id: "v-wukong-pc", platform: "PC (Steam)", region: "Global", priceUsd: 54.99, stock: 30 },
+      { id: "v-wukong-ps", platform: "PlayStation 5", region: "US Store", priceUsd: 59.99, stock: 18 }
     ]
   },
   {
@@ -426,8 +427,8 @@ const MOCK_GAMES = [
     description: "Shooter cooperativo galáctico en tercera persona por la Supertierra.",
     priceHistory30d: { lowest: 33.99, highest: 39.99, isLowest30d: false },
     variants: [
-      { id: "v-hd2-pc", platform: "PC (Steam)", region: "Global", supplierCostUsd: 31.00, priceUsd: 34.99, stock: 50, g2aPriceUsd: 31.80, enebaPriceUsd: 31.00 },
-      { id: "v-hd2-ps", platform: "PlayStation 5", region: "US Store", supplierCostUsd: 34.00, priceUsd: 37.99, stock: 25, g2aPriceUsd: 34.90, enebaPriceUsd: 34.00 }
+      { id: "v-hd2-pc", platform: "PC (Steam)", region: "Global", priceUsd: 34.99, stock: 50 },
+      { id: "v-hd2-ps", platform: "PlayStation 5", region: "US Store", priceUsd: 37.99, stock: 25 }
     ]
   },
   {
@@ -439,8 +440,8 @@ const MOCK_GAMES = [
     description: "Embarca en un viaje épico a través de los Nueve Reinos con Kratos y Atreus.",
     priceHistory30d: { lowest: 46.99, highest: 55.00, isLowest30d: false },
     variants: [
-      { id: "v-gowr-pc", platform: "PC (Steam)", region: "Global", supplierCostUsd: 44.00, priceUsd: 49.99, stock: 22, g2aPriceUsd: 45.00, enebaPriceUsd: 44.00 },
-      { id: "v-gowr-ps", platform: "PlayStation 5", region: "US Store", supplierCostUsd: 48.00, priceUsd: 53.99, stock: 30, g2aPriceUsd: 49.10, enebaPriceUsd: 48.00 }
+      { id: "v-gowr-pc", platform: "PC (Steam)", region: "Global", priceUsd: 49.99, stock: 22 },
+      { id: "v-gowr-ps", platform: "PlayStation 5", region: "US Store", priceUsd: 53.99, stock: 30 }
     ]
   },
   {
@@ -452,7 +453,7 @@ const MOCK_GAMES = [
     description: "Estatus Prime oficial para matchmaking exclusivo y drops semanales en CS2.",
     priceHistory30d: { lowest: 14.50, highest: 16.00, isLowest30d: true },
     variants: [
-      { id: "v-cs2p-pc", platform: "PC (Steam)", region: "Global", supplierCostUsd: 13.50, priceUsd: 14.99, stock: 65, g2aPriceUsd: 13.90, enebaPriceUsd: 13.50 }
+      { id: "v-cs2p-pc", platform: "PC (Steam)", region: "Global", priceUsd: 14.99, stock: 65 }
     ]
   },
   {
@@ -464,7 +465,7 @@ const MOCK_GAMES = [
     description: "Supervive, construye refugios y forma alianzas en el juego definitivo de supervivencia sandbox.",
     priceHistory30d: { lowest: 23.99, highest: 29.99, isLowest30d: false },
     variants: [
-      { id: "v-rust-pc", platform: "PC (Steam)", region: "Global", supplierCostUsd: 21.00, priceUsd: 24.99, stock: 40, g2aPriceUsd: 21.70, enebaPriceUsd: 21.00 }
+      { id: "v-rust-pc", platform: "PC (Steam)", region: "Global", priceUsd: 24.99, stock: 40 }
     ]
   },
   {
@@ -476,8 +477,8 @@ const MOCK_GAMES = [
     description: "Construye y explora mundos infinitos. Incluye ediciones Java y Bedrock para PC.",
     priceHistory30d: { lowest: 18.99, highest: 22.00, isLowest30d: true },
     variants: [
-      { id: "v-mc-pc", platform: "PC (Steam)", region: "Global", supplierCostUsd: 17.50, priceUsd: 19.99, stock: 100, g2aPriceUsd: 18.00, enebaPriceUsd: 17.50 },
-      { id: "v-mc-nin", platform: "Nintendo Switch", region: "US Store", supplierCostUsd: 24.00, priceUsd: 27.99, stock: 30, g2aPriceUsd: 24.80, enebaPriceUsd: 24.00 }
+      { id: "v-mc-pc", platform: "PC (Steam)", region: "Global", priceUsd: 19.99, stock: 100 },
+      { id: "v-mc-nin", platform: "Nintendo Switch", region: "US Store", priceUsd: 27.99, stock: 30 }
     ]
   },
   {
@@ -489,8 +490,8 @@ const MOCK_GAMES = [
     description: "Aventura de espionaje y acción RPG en la megalópolis de Night City.",
     priceHistory30d: { lowest: 25.00, highest: 31.00, isLowest30d: false },
     variants: [
-      { id: "v-cp2077-pc", platform: "PC (Steam)", region: "Global", supplierCostUsd: 22.00, priceUsd: 26.99, stock: 40, g2aPriceUsd: 22.80, enebaPriceUsd: 22.00 },
-      { id: "v-cp2077-ps", platform: "PlayStation 5", region: "US Store", supplierCostUsd: 28.00, priceUsd: 32.99, stock: 15, g2aPriceUsd: 28.90, enebaPriceUsd: 28.00 }
+      { id: "v-cp2077-pc", platform: "PC (Steam)", region: "Global", priceUsd: 26.99, stock: 40 },
+      { id: "v-cp2077-ps", platform: "PlayStation 5", region: "US Store", priceUsd: 32.99, stock: 15 }
     ]
   },
   {
@@ -502,8 +503,8 @@ const MOCK_GAMES = [
     description: "El aclamado RPG de acción de FromSoftware junto a su expansión oficial.",
     priceHistory30d: { lowest: 41.50, highest: 49.99, isLowest30d: true },
     variants: [
-      { id: "v-er-pc", platform: "PC (Steam)", region: "Global", supplierCostUsd: 38.00, priceUsd: 42.99, stock: 22, g2aPriceUsd: 38.90, enebaPriceUsd: 38.00 },
-      { id: "v-er-ps", platform: "PlayStation 5", region: "US Store", supplierCostUsd: 44.00, priceUsd: 48.99, stock: 15, g2aPriceUsd: 44.70, enebaPriceUsd: 44.00 }
+      { id: "v-er-pc", platform: "PC (Steam)", region: "Global", priceUsd: 42.99, stock: 22 },
+      { id: "v-er-ps", platform: "PlayStation 5", region: "US Store", priceUsd: 48.99, stock: 15 }
     ]
   },
 
@@ -517,7 +518,7 @@ const MOCK_GAMES = [
     description: "El icónico shooter cooperativo de zombis en primera persona de Valve.",
     priceHistory30d: { lowest: 3.50, highest: 4.99, isLowest30d: true },
     variants: [
-      { id: "v-l4d2-pc", platform: "PC (Steam)", region: "Global", supplierCostUsd: 1.80, priceUsd: 3.99, stock: 100, g2aPriceUsd: 2.10, enebaPriceUsd: 1.80 }
+      { id: "v-l4d2-pc", platform: "PC (Steam)", region: "Global", priceUsd: 3.99, stock: 100 }
     ]
   },
   {
@@ -529,7 +530,7 @@ const MOCK_GAMES = [
     description: "Explora, cava, combate y construye en este aclamado juego de aventura sandbox 2D.",
     priceHistory30d: { lowest: 4.50, highest: 5.99, isLowest30d: false },
     variants: [
-      { id: "v-ter-pc", platform: "PC (Steam)", region: "Global", supplierCostUsd: 3.20, priceUsd: 4.99, stock: 75, g2aPriceUsd: 3.50, enebaPriceUsd: 3.20 }
+      { id: "v-ter-pc", platform: "PC (Steam)", region: "Global", priceUsd: 4.99, stock: 75 }
     ]
   },
   {
@@ -541,7 +542,7 @@ const MOCK_GAMES = [
     description: "Simulador definitivo realista de supervivencia zombi con multijugador.",
     priceHistory30d: { lowest: 8.50, highest: 10.20, isLowest30d: true },
     variants: [
-      { id: "v-pz-pc", platform: "PC (Steam)", region: "Global", supplierCostUsd: 7.00, priceUsd: 8.99, stock: 60, g2aPriceUsd: 7.40, enebaPriceUsd: 7.00 }
+      { id: "v-pz-pc", platform: "PC (Steam)", region: "Global", priceUsd: 8.99, stock: 60 }
     ]
   },
   {
@@ -553,8 +554,8 @@ const MOCK_GAMES = [
     description: "Hereda la granja de tu abuelo y construye la vida agrícola de tus sueños.",
     priceHistory30d: { lowest: 6.50, highest: 8.99, isLowest30d: false },
     variants: [
-      { id: "v-sv-pc", platform: "PC (Steam)", region: "Global", supplierCostUsd: 4.50, priceUsd: 6.99, stock: 80, g2aPriceUsd: 4.80, enebaPriceUsd: 4.50 },
-      { id: "v-sv-nin", platform: "Nintendo Switch", region: "US Store", supplierCostUsd: 6.00, priceUsd: 8.50, stock: 40, g2aPriceUsd: 6.30, enebaPriceUsd: 6.00 }
+      { id: "v-sv-pc", platform: "PC (Steam)", region: "Global", priceUsd: 6.99, stock: 80 },
+      { id: "v-sv-nin", platform: "Nintendo Switch", region: "US Store", priceUsd: 8.50, stock: 40 }
     ]
   },
   {
@@ -566,7 +567,7 @@ const MOCK_GAMES = [
     description: "Juego de trabajo en equipo y deducción social en el espacio para 4-15 jugadores.",
     priceHistory30d: { lowest: 3.20, highest: 4.50, isLowest30d: true },
     variants: [
-      { id: "v-au-pc", platform: "PC (Steam)", region: "Global", supplierCostUsd: 2.00, priceUsd: 3.50, stock: 120, g2aPriceUsd: 2.20, enebaPriceUsd: 2.00 }
+      { id: "v-au-pc", platform: "PC (Steam)", region: "Global", priceUsd: 3.50, stock: 120 }
     ]
   }
 ];
@@ -588,6 +589,24 @@ const FEATURED_OFFERS = [
 ];
 
 const FEATURED_OFFER_INTERVALS = [5000, 55000, 105000];
+
+type SupplierComparisonResult = {
+  variant_id: string;
+  comparisons: Array<{
+    supplier: string;
+    url: string;
+    price_usd: number | null;
+    error: string | null;
+  }>;
+  cheapest_supplier: string | null;
+  cheapest_url: string | null;
+  cheapest_base_usd: number | null;
+  profit_margin_percent: number;
+  final_usd: number | null;
+  bcv_rate: number | null;
+  final_bs: number | null;
+  used_fallback: boolean;
+};
 
 function RecentActivityNotification({
   onProductClick,
@@ -669,6 +688,8 @@ export default function App() {
   const [bcvRate, setBcvRate] = useState<number | null>(null);
   const [bcvRateError, setBcvRateError] = useState<string | null>(null);
   const [binanceP2PRate] = useState(1050.25);
+  const [supplierPriceOverrides, setSupplierPriceOverrides] = useState<Record<string, { final_usd: number; final_bs: number }>>({});
+  const [supplierPriceLoadError, setSupplierPriceLoadError] = useState<string | null>(null);
 
   // Navegación e Interfaz PWA
   const [cart, setCart] = useState([]);
@@ -693,6 +714,10 @@ export default function App() {
   const [showAdminLoginModal, setShowAdminLoginModal] = useState(false);
   const [adminLoginForm, setAdminLoginForm] = useState({ email: '', password: '' });
   const [adminTab, setAdminTab] = useState('sales'); // 'sales' | 'analytics'
+  const [selectedSupplierVariantId, setSelectedSupplierVariantId] = useState(MOCK_GAMES[0].variants[0].id);
+  const [supplierComparison, setSupplierComparison] = useState<SupplierComparisonResult | null>(null);
+  const [supplierComparisonError, setSupplierComparisonError] = useState<string | null>(null);
+  const [isRefreshingSupplierPrices, setIsRefreshingSupplierPrices] = useState(false);
 
   // Formulario Checkout
   const [checkoutForm, setCheckoutForm] = useState({
@@ -733,11 +758,6 @@ export default function App() {
           variantId: 'v-s20-glo',
           gameId: 'g-steam-20',
           priceUsd: 21.50,
-          bestSupplier: 'Eneba',
-          supplierCostUsd: 19.50,
-          g2aPriceUsd: 19.90,
-          enebaPriceUsd: 19.50,
-          profitMarginUsd: 2.00
         }
       ]
     },
@@ -757,11 +777,6 @@ export default function App() {
           variantId: 'v-fc26-ps',
           gameId: 'j-eafc-26',
           priceUsd: 59.99,
-          bestSupplier: 'Eneba',
-          supplierCostUsd: 55.00,
-          g2aPriceUsd: 56.10,
-          enebaPriceUsd: 55.00,
-          profitMarginUsd: 4.99
         }
       ]
     }
@@ -819,6 +834,62 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    const controller = new AbortController();
+    const variantIds = MOCK_GAMES.flatMap((game) => game.variants.map((variant) => variant.id));
+    const query = new URLSearchParams({ variants: variantIds.join(',') });
+
+    fetch(`/api/product-prices?${query}`, { signal: controller.signal, cache: 'no-store' })
+      .then(async (response) => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error ?? 'No se pudieron cargar los precios configurados.');
+        setSupplierPriceOverrides(data.prices ?? {});
+        setSupplierPriceLoadError(null);
+      })
+      .catch((error) => {
+        if (controller.signal.aborted) return;
+        const message = error instanceof Error ? error.message : 'Error desconocido al cargar precios.';
+        setSupplierPriceLoadError(message);
+        console.error('Error al cargar precios de proveedores:', error);
+      });
+
+    return () => controller.abort();
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    let unsubscribe = () => {};
+
+    try {
+      const supabase = getSupabaseBrowserClient();
+      supabase.auth.getSession().then(({ data, error }) => {
+        if (error) {
+          console.error('Error al restaurar la sesión de administración:', error);
+          return;
+        }
+        if (active && data.session?.user.app_metadata.role === 'admin') {
+          setIsAdminAuthenticated(true);
+          setActiveTab('admin');
+        }
+      });
+
+      const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+        if (!active) return;
+        const isAdmin = session?.user.app_metadata.role === 'admin';
+        setIsAdminAuthenticated(Boolean(isAdmin));
+        if (!isAdmin && activeTab === 'admin') setActiveTab('home');
+      });
+      unsubscribe = () => data.subscription.unsubscribe();
+    } catch (error) {
+      console.error('No se pudo inicializar la sesión de Supabase:', error);
+    }
+
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, []);
+
   const bsfCoverageFactor = useMemo(
     () => (bcvRate === null ? null : binanceP2PRate / bcvRate),
     [binanceP2PRate, bcvRate]
@@ -833,6 +904,23 @@ export default function App() {
     if (totalBs === null) return '—';
     return new Intl.NumberFormat('es-VE', { maximumFractionDigits: 0 }).format(totalBs);
   };
+
+  const priceForVariant = (variant) => supplierPriceOverrides[variant.id]?.final_usd ?? variant.priceUsd;
+  const priceBsForVariant = (variant) => {
+    return calculateBs(priceForVariant(variant));
+  };
+
+  useEffect(() => {
+    if (Object.keys(supplierPriceOverrides).length === 0) return;
+    setCart((items) => items.map((item) => {
+      const variant = MOCK_GAMES.flatMap((game) => game.variants).find((candidate) => candidate.id === item.variantId);
+      if (!variant) return item;
+      return {
+        ...item,
+        priceUsd: supplierPriceOverrides[variant.id]?.final_usd ?? variant.priceUsd,
+      };
+    }));
+  }, [supplierPriceOverrides]);
 
   const totalCartUsd = cart.reduce((acc, item) => acc + (item.priceUsd * item.quantity), 0);
   const totalCartItems = cart.reduce((acc, item) => acc + item.quantity, 0);
@@ -875,14 +963,12 @@ export default function App() {
       return [...prev, {
         cartItemId,
         gameId: game.id,
+        variantId: variant.id,
         title: game.title,
         coverImage: game.coverImage,
         platform: variant.platform,
         region: variant.region,
-        priceUsd: variant.priceUsd,
-        supplierCostUsd: variant.supplierCostUsd,
-        g2aPriceUsd: variant.g2aPriceUsd || variant.supplierCostUsd,
-        enebaPriceUsd: variant.enebaPriceUsd || variant.supplierCostUsd,
+        priceUsd: priceForVariant(variant),
         quantity: 1
       }];
     });
@@ -902,21 +988,74 @@ export default function App() {
   };
 
   // Login del Administrador
-  const handleAdminLogin = (e) => {
+  const handleAdminLogin = async (e) => {
     e.preventDefault();
-    if (adminLoginForm.email === 'admin@lacasitagamer.com' && adminLoginForm.password === '654321') {
+    try {
+      const { data, error } = await getSupabaseBrowserClient().auth.signInWithPassword({
+        email: adminLoginForm.email,
+        password: adminLoginForm.password,
+      });
+      if (error) throw error;
+      if (data.user.app_metadata.role !== 'admin') {
+        await getSupabaseBrowserClient().auth.signOut();
+        throw new Error('Esta cuenta no tiene permisos de administrador.');
+      }
+
       setIsAdminAuthenticated(true);
       setShowAdminLoginModal(false);
       setActiveTab('admin');
-    } else {
-      alert("Credenciales administrativas inválidas.");
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'No se pudo iniciar sesión como administrador.');
     }
   };
 
   // Cerrar Sesión del Administrador
-  const handleAdminLogout = () => {
+  const handleAdminLogout = async () => {
+    const { error } = await getSupabaseBrowserClient().auth.signOut();
+    if (error) {
+      alert(`No se pudo cerrar la sesión: ${error.message}`);
+      return;
+    }
     setIsAdminAuthenticated(false);
     setActiveTab('home');
+  };
+
+  const refreshSupplierComparison = async () => {
+    setIsRefreshingSupplierPrices(true);
+    setSupplierComparisonError(null);
+    setSupplierComparison(null);
+    try {
+      const { data: { session }, error: sessionError } = await getSupabaseBrowserClient().auth.getSession();
+      if (sessionError) throw sessionError;
+      if (!session) throw new Error('Inicia sesión nuevamente para consultar proveedores.');
+
+      const response = await fetch('/api/fetch-best-price', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ variantId: selectedSupplierVariantId }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        if (Array.isArray(data.comparisons)) {
+          setSupplierComparison(data as SupplierComparisonResult);
+        }
+        throw new Error(data.error ?? 'No se pudo comparar el precio de los proveedores.');
+      }
+
+      setSupplierComparison(data as SupplierComparisonResult);
+      setSupplierPriceOverrides((previous) => ({
+        ...previous,
+        [data.variant_id]: { final_usd: data.final_usd, final_bs: data.final_bs },
+      }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Error desconocido al consultar proveedores.';
+      setSupplierComparisonError(message);
+    } finally {
+      setIsRefreshingSupplierPrices(false);
+    }
   };
 
   // Procesar Compra y Generación de Puntos Gamer Cash
@@ -939,24 +1078,12 @@ export default function App() {
       const earnedPoints = Math.floor(finalCheckoutUsd * 10);
       const updatedPoints = (usePointsInCheckout ? gamerPoints - (pointsUsdDiscount * 100) : gamerPoints) + earnedPoints;
 
-      const itemsWithArbitrage = cart.map(item => {
-        const g2a = item.g2aPriceUsd || item.supplierCostUsd;
-        const eneba = item.enebaPriceUsd || item.supplierCostUsd;
-        const lowestSupplierCost = Math.min(g2a, eneba);
-        const bestSupplier = eneba <= g2a ? 'Eneba' : 'G2A';
-
-        return {
-          name: `${item.title} (${item.platform})`,
-          variantId: item.cartItemId,
-          gameId: item.gameId,
-          priceUsd: item.priceUsd,
-          bestSupplier,
-          supplierCostUsd: lowestSupplierCost,
-          g2aPriceUsd: g2a,
-          enebaPriceUsd: eneba,
-          profitMarginUsd: item.priceUsd - lowestSupplierCost
-        };
-      });
+      const itemsWithArbitrage = cart.map(item => ({
+        name: `${item.title} (${item.platform})`,
+        variantId: item.variantId,
+        gameId: item.gameId,
+        priceUsd: item.priceUsd,
+      }));
 
       const generatedOrder = {
         id: `VK-${Math.floor(100000 + Math.random() * 900000)}`,
@@ -1126,6 +1253,11 @@ export default function App() {
 
       {/* CONTENIDO PRINCIPAL */}
       <main className="max-w-7xl mx-auto px-4 pt-6 space-y-8">
+        {supplierPriceLoadError && (
+          <p role="status" className="rounded-xl border border-amber-500/30 bg-amber-950/20 px-4 py-2 text-xs text-amber-200">
+            No se pudieron cargar precios actualizados de proveedores; se muestran los precios base del catálogo.
+          </p>
+        )}
         
         {/* PANEL ADMIN OCULTO */}
         {activeTab === 'admin' && isAdminAuthenticated ? (
@@ -1154,6 +1286,14 @@ export default function App() {
                   }`}
                 >
                   Analíticas & Métricas
+                </button>
+                <button
+                  onClick={() => setAdminTab('suppliers')}
+                  className={`text-xs font-bold px-3 py-1.5 rounded-xl border transition ${
+                    adminTab === 'suppliers' ? 'bg-purple-600 border-purple-400 text-white' : 'bg-slate-950 border-slate-800 text-slate-400'
+                  }`}
+                >
+                  Proveedores
                 </button>
                 <button 
                   onClick={handleAdminLogout}
@@ -1195,37 +1335,30 @@ export default function App() {
                         </div>
                       </div>
 
-                      {/* ARBITRAJE DE COMPRA SUGERIDO PARA EL PRODUCTO VENDIDO */}
+                      {/* Acceso a la comparativa privada para las variantes vendidas */}
                       <div className="mt-3 pt-3 border-t border-slate-900 space-y-2">
                         <p className="text-[11px] font-bold text-purple-300 uppercase tracking-wider flex items-center gap-1">
-                          <ArrowUpRight className="w-3.5 h-3.5" /> Recomendación de Adquisición (Key Arbitrage):
+                          <ArrowUpRight className="w-3.5 h-3.5" /> Fulfillment y proveedores:
                         </p>
                         {sale.items.map((item, idx) => (
                           <div key={idx} className="bg-slate-900/90 p-3 rounded-xl border border-slate-800 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
                             <div>
                               <p className="font-bold text-white text-xs">{item.name}</p>
-                              <div className="flex gap-3 text-[11px] text-slate-400 mt-0.5">
-                                <span>G2A: <strong className="text-slate-200 font-mono">${item.g2aPriceUsd.toFixed(2)}</strong></span>
-                                <span>Eneba: <strong className="text-slate-200 font-mono">${item.enebaPriceUsd.toFixed(2)}</strong></span>
-                              </div>
+                              <p className="mt-0.5 text-[11px] text-slate-400">Precio de venta: ${item.priceUsd.toFixed(2)} USD</p>
                             </div>
 
-                            <div className="flex items-center gap-3">
-                              <div className="text-right">
-                                <span className="text-[10px] bg-emerald-500/20 text-emerald-400 font-bold px-2 py-0.5 rounded border border-emerald-500/30 block">
-                                  Comprar en {item.bestSupplier} (${item.supplierCostUsd.toFixed(2)})
-                                </span>
-                                <span className="text-[10px] text-purple-300">Margen Neto: +${item.profitMarginUsd.toFixed(2)} USD</span>
-                              </div>
-                              <a 
-                                href={`https://www.${item.bestSupplier.toLowerCase()}.com`} 
-                                target="_blank" 
-                                rel="noreferrer"
-                                className="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold text-[10px] px-3 py-1.5 rounded-lg shadow"
-                              >
-                                Comprar Key
-                              </a>
-                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedSupplierVariantId(item.variantId);
+                                setSupplierComparison(null);
+                                setSupplierComparisonError(null);
+                                setAdminTab('suppliers');
+                              }}
+                              className="rounded-lg bg-gradient-to-r from-purple-600 to-indigo-600 px-3 py-1.5 text-[10px] font-bold text-white shadow transition hover:from-purple-500 hover:to-indigo-500"
+                            >
+                              Comparar proveedores
+                            </button>
                           </div>
                         ))}
                       </div>
@@ -1242,7 +1375,7 @@ export default function App() {
                   ))}
                 </div>
               </div>
-            ) : (
+            ) : adminTab === 'analytics' ? (
               <div className="space-y-4">
                 <h2 className="text-lg font-bold text-white flex items-center gap-2">
                   <BarChart3 className="w-5 h-5 text-purple-400" /> Analíticas de Mercado & Brecha Cambiaria
@@ -1267,6 +1400,120 @@ export default function App() {
                   </div>
                 </div>
               </div>
+            ) : (
+              <section className="space-y-5">
+                <div>
+                  <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                    <TrendingDown className="w-5 h-5 text-emerald-400" /> Comparativa privada de proveedores
+                  </h2>
+                  <p className="mt-1 text-xs text-slate-400">
+                    Los costos y enlaces de proveedores solo se muestran a cuentas con rol admin de Supabase.
+                  </p>
+                </div>
+
+                <div className="flex flex-col sm:flex-row gap-3">
+                  <select
+                    value={selectedSupplierVariantId}
+                    onChange={(event) => {
+                      setSelectedSupplierVariantId(event.target.value);
+                      setSupplierComparison(null);
+                      setSupplierComparisonError(null);
+                    }}
+                    className="flex-1 rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
+                  >
+                    {MOCK_GAMES.flatMap((game) => game.variants.map((variant) => (
+                      <option key={variant.id} value={variant.id}>
+                        {game.title} — {variant.platform}
+                      </option>
+                    )))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={refreshSupplierComparison}
+                    disabled={isRefreshingSupplierPrices}
+                    className="rounded-xl bg-purple-600 px-4 py-2 text-sm font-bold text-white transition hover:bg-purple-500 disabled:cursor-wait disabled:opacity-60"
+                  >
+                    {isRefreshingSupplierPrices ? 'Consultando proveedores…' : 'Actualizar y comparar'}
+                  </button>
+                </div>
+
+                {supplierComparisonError && (
+                  <p role="alert" className="rounded-xl border border-red-500/30 bg-red-950/30 p-3 text-sm text-red-300">
+                    {supplierComparisonError}
+                  </p>
+                )}
+
+                {supplierComparison && (
+                  <div className="space-y-4 rounded-2xl border border-slate-800 bg-slate-950 p-4">
+                    <div className="flex flex-wrap justify-between gap-2 text-sm">
+                      <span className="text-slate-300">
+                        Costo base:{' '}
+                        <strong className="font-mono text-white">
+                          {supplierComparison.cheapest_base_usd === null ? 'No disponible' : `$${supplierComparison.cheapest_base_usd.toFixed(2)}`}
+                        </strong>
+                        {supplierComparison.used_fallback && <span className="ml-2 text-amber-300">(costo de respaldo)</span>}
+                      </span>
+                      <span className="text-slate-300">
+                        Margen {supplierComparison.profit_margin_percent}% · Precio final{' '}
+                        <strong className="font-mono text-cyan-300">
+                          {supplierComparison.final_usd === null ? '—' : `$${supplierComparison.final_usd.toFixed(2)}`}
+                        </strong>
+                        {' · '}
+                        <strong className="font-mono text-cyan-300">
+                          {supplierComparison.final_bs === null
+                            ? '—'
+                            : `${new Intl.NumberFormat('es-VE', { maximumFractionDigits: 0 }).format(supplierComparison.final_bs)} Bs.`}
+                        </strong>
+                      </span>
+                    </div>
+
+                    <div className="grid gap-3 sm:grid-cols-3">
+                      {supplierComparison.comparisons.map((comparison) => {
+                        const isCheapest = comparison.supplier === supplierComparison.cheapest_supplier;
+                        return (
+                          <article
+                            key={comparison.supplier}
+                            className={`rounded-xl border p-3 ${isCheapest ? 'border-emerald-400/60 bg-emerald-950/20' : 'border-slate-800 bg-slate-900/70'}`}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <h3 className="font-bold uppercase text-white">{comparison.supplier}</h3>
+                              {isCheapest && (
+                                <span className="rounded bg-emerald-500/20 px-2 py-0.5 text-[10px] font-bold text-emerald-300">
+                                  MÁS BARATO
+                                </span>
+                              )}
+                            </div>
+                            <p className="mt-2 font-mono text-lg text-cyan-200">
+                              {comparison.price_usd === null ? 'No disponible' : `$${comparison.price_usd.toFixed(2)} USD`}
+                            </p>
+                            {comparison.error && <p className="mt-1 text-xs text-amber-300">{comparison.error}</p>}
+                            <a
+                              href={comparison.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="mt-3 inline-block text-xs text-purple-300 underline decoration-purple-500/50 underline-offset-2 hover:text-white"
+                            >
+                              Abrir página del proveedor
+                            </a>
+                          </article>
+                        );
+                      })}
+                    </div>
+
+                    {supplierComparison.cheapest_url && (
+                      <a
+                        href={supplierComparison.cheapest_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 px-4 py-2 text-sm font-bold text-white transition hover:from-emerald-500 hover:to-teal-500"
+                      >
+                        <ArrowUpRight className="h-4 w-4" />
+                        Comprar al proveedor más barato ({supplierComparison.cheapest_supplier})
+                      </a>
+                    )}
+                  </div>
+                )}
+              </section>
             )}
           </div>
         ) : activeTab === 'profile' ? (
@@ -1350,11 +1597,11 @@ export default function App() {
                     <div className="flex items-baseline gap-3 pt-1">
                       {/* PRECIO PRIMARIO DESTACADO EN BOLÍVARES */}
                       <span className="text-2xl sm:text-3xl font-black text-cyan-300 font-mono">
-                        {calculateBs(heroItems[currentSlide].variants[0].priceUsd)} Bs.
+                        {priceBsForVariant(heroItems[currentSlide].variants[0])} Bs.
                       </span>
                       {/* PRECIO SECUNDARIO EN USD */}
                       <span className="text-xs sm:text-sm text-slate-400 font-mono">
-                        ≈ ${heroItems[currentSlide].variants[0].priceUsd.toFixed(2)} USD
+                        ≈ ${priceForVariant(heroItems[currentSlide].variants[0]).toFixed(2)} USD
                       </span>
                     </div>
 
@@ -1554,11 +1801,11 @@ export default function App() {
                         <div>
                           {/* PRECIO PRIMARIO EN BOLÍVARES (Bs.) */}
                           <span className="text-xl font-black text-cyan-300 font-mono block">
-                            {calculateBs(activeVariant.priceUsd)} Bs.
+                            {priceBsForVariant(activeVariant)} Bs.
                           </span>
                           {/* PRECIO SECUNDARIO EN DÓLARES ($) */}
                           <p className="text-[11px] text-slate-400 font-mono font-semibold">
-                            ≈ ${activeVariant.priceUsd.toFixed(2)} USD
+                            ≈ ${priceForVariant(activeVariant).toFixed(2)} USD
                           </p>
                         </div>
 
