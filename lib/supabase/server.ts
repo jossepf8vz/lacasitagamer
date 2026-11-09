@@ -1,14 +1,26 @@
 import { createClient } from '@supabase/supabase-js';
 
 export function getSupabaseServerClient() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const rawUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-  if (!url || !serviceRoleKey) {
+  if (!rawUrl || !serviceRoleKey) {
     throw new Error('Configura NEXT_PUBLIC_SUPABASE_URL y SUPABASE_SERVICE_ROLE_KEY en el servidor.');
   }
 
-  return createClient(url, serviceRoleKey, {
+  let supabaseUrl: string;
+  try {
+    const parsedUrl = new URL(rawUrl);
+    const isLocalHttp = parsedUrl.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(parsedUrl.hostname);
+    if (!isLocalHttp && parsedUrl.protocol !== 'https:') {
+      throw new Error('unsupported protocol');
+    }
+    supabaseUrl = parsedUrl.origin;
+  } catch {
+    throw new Error('NEXT_PUBLIC_SUPABASE_URL no es una URL HTTPS válida del proyecto Supabase.');
+  }
+
+  return createClient(supabaseUrl, serviceRoleKey, {
     auth: {
       autoRefreshToken: false,
       persistSession: false,
