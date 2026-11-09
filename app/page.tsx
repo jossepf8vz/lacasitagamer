@@ -590,6 +590,7 @@ const FEATURED_OFFERS = [
 ];
 
 const FEATURED_OFFER_INTERVALS = [5000, 55000, 105000];
+const BCV_RATE_CACHE_KEY = 'lacasitagamer:bcv-rate';
 
 type SupplierComparisonResult = {
   variant_id: string;
@@ -689,6 +690,8 @@ export default function App() {
   // Tasas Financieras
   const [bcvRate, setBcvRate] = useState<number | null>(null);
   const [bcvRateError, setBcvRateError] = useState<string | null>(null);
+  const [isBcvRateLoading, setIsBcvRateLoading] = useState(true);
+  const [isBcvRateFromCache, setIsBcvRateFromCache] = useState(false);
   const [binanceP2PRate] = useState(1050.25);
   const [supplierPriceOverrides, setSupplierPriceOverrides] = useState<Record<string, { final_usd: number; final_bs: number }>>({});
   const [supplierPriceLoadError, setSupplierPriceLoadError] = useState<string | null>(null);
@@ -797,33 +800,73 @@ export default function App() {
   }, [heroItems.length]);
 
   useEffect(() => {
-    const controller = new AbortController();
+    let active = true;
+    let activeRequest: AbortController | null = null;
+
+    try {
+      const cachedValue = window.localStorage.getItem(BCV_RATE_CACHE_KEY);
+      if (cachedValue) {
+        const cached = JSON.parse(cachedValue);
+        const cachedRate = Number(cached?.rate);
+        if (Number.isFinite(cachedRate) && cachedRate > 0) {
+          setBcvRate(cachedRate);
+          setIsBcvRateFromCache(true);
+          setIsBcvRateLoading(false);
+        }
+      }
+    } catch (error) {
+      console.warn('No se pudo leer la tasa BCV guardada localmente:', error);
+    }
 
     const fetchBcvRate = async () => {
+      const requestController = new AbortController();
+      activeRequest = requestController;
+      const timeout = setTimeout(() => requestController.abort(), 10000);
+
       try {
         const response = await fetch('https://ve.dolarapi.com/v1/dolares/oficial', {
           cache: 'no-store',
-          signal: controller.signal,
+          signal: requestController.signal,
         });
         if (!response.ok) {
           throw new Error(`La API BCV respondió con el estado ${response.status}.`);
         }
 
         const data: unknown = await response.json();
-        if (typeof data !== 'object' || data === null || !('promedio' in data)) {
+        if (typeof data !== 'object' || data === null) {
           throw new Error('La respuesta de la API BCV no contiene una tasa válida.');
         }
 
-        const rate = data.promedio;
-        if (typeof rate !== 'number' || !Number.isFinite(rate) || rate <= 0) {
+        const rawRate = 'promedio' in data ? data.promedio : 'price' in data ? data.price : null;
+        const rate = typeof rawRate === 'number' || typeof rawRate === 'string' ? Number(rawRate) : NaN;
+        if (!Number.isFinite(rate) || rate <= 0) {
           throw new Error('La respuesta de la API BCV no contiene una tasa válida.');
         }
 
+        if (!active) return;
         setBcvRate(rate);
+        setIsBcvRateFromCache(false);
         setBcvRateError(null);
+        setIsBcvRateLoading(false);
+        try {
+          window.localStorage.setItem(BCV_RATE_CACHE_KEY, JSON.stringify({
+            rate,
+            savedAt: new Date().toISOString(),
+          }));
+        } catch (error) {
+          console.warn('No se pudo guardar la tasa BCV en caché local:', error);
+        }
       } catch (error) {
-        if (controller.signal.aborted) return;
-        setBcvRateError(error instanceof Error ? error.message : 'No se pudo consultar la tasa BCV.');
+        if (!active || requestController.signal.aborted && activeRequest !== requestController) return;
+        setBcvRateError(
+          requestController.signal.aborted
+            ? 'La consulta de la tasa BCV superó el tiempo de espera.'
+            : error instanceof Error ? error.message : 'No se pudo consultar la tasa BCV.'
+        );
+        setIsBcvRateLoading(false);
+      } finally {
+        clearTimeout(timeout);
+        if (activeRequest === requestController) activeRequest = null;
       }
     };
 
@@ -833,7 +876,8 @@ export default function App() {
     }, 15 * 60 * 1000);
 
     return () => {
-      controller.abort();
+      active = false;
+      activeRequest?.abort();
       clearInterval(refreshTimer);
     };
   }, []);
@@ -1008,13 +1052,13 @@ export default function App() {
         email: adminLoginForm.email,
         password: adminLoginForm.password,
       });
-      if (error || !data.user) {
-        throw new Error('Credenciales incorrectas. Verifica el correo y la contraseña.');
-      }
+      if (error) throw error;
+      if (!data.user) throw new Error('Supabase Auth no devolvió un usuario autenticado.');
+
       if (data.user.app_metadata.role !== 'admin') {
         const { error: signOutError } = await getSupabaseBrowserClient().auth.signOut();
         if (signOutError) console.error('No se pudo cerrar la sesión sin permisos de administrador:', signOutError);
-        throw new Error('Esta cuenta no tiene permisos de administrador.');
+        throw new Error('Acceso denegado: esta cuenta no tiene permisos de administrador');
       }
 
       setIsAdminAuthenticated(true);
@@ -1022,12 +1066,7 @@ export default function App() {
       setActiveTab('admin');
       router.push('/admin/dashboard');
     } catch (error) {
-      const message = error instanceof Error ? error.message : '';
-      setAdminLoginError(
-        message.includes('Invalid path specified')
-          ? 'No se pudo conectar con Supabase. Verifica NEXT_PUBLIC_SUPABASE_URL en la configuración de producción.'
-          : message || 'No se pudo iniciar sesión. Revisa la configuración y vuelve a intentarlo.'
-      );
+      setAdminLoginError(error instanceof Error ? error.message : String(error));
     } finally {
       setIsAdminLoginPending(false);
     }
@@ -1186,11 +1225,18 @@ export default function App() {
         <div className="bg-gradient-to-r from-purple-950 via-indigo-950 to-slate-950 px-4 py-1.5 text-xs text-slate-300 flex justify-between items-center border-b border-purple-800/20">
           <div className="flex items-center gap-2">
             <span className="flex h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
-            <span className="text-purple-300 font-semibold">Tasa Oficial BCV:</span> 
+            <span className="text-purple-300 font-semibold">Tasa BCV Oficial:</span>
             <span className="text-white font-bold font-mono" aria-live="polite" title={bcvRateError ?? undefined}>
-              {bcvRate === null ? (bcvRateError ? 'No disponible' : 'Consultando...') : `1 USD = ${bcvRate.toFixed(2)} Bs.`}
+              {bcvRate === null
+                ? (isBcvRateLoading ? 'Cargando tasa...' : 'No disponible')
+                : `${new Intl.NumberFormat('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(bcvRate)} Bs/USD`}
             </span>
-            {bcvRate !== null && bcvRateError && (
+            {bcvRate !== null && isBcvRateFromCache && (
+              <span className="text-amber-300" title={bcvRateError ?? 'Usando la última tasa guardada en este dispositivo.'}>
+                (caché local)
+              </span>
+            )}
+            {bcvRate !== null && !isBcvRateFromCache && bcvRateError && (
               <span className="text-amber-300" title={bcvRateError}> (desactualizada)</span>
             )}
             <span className="text-slate-500 hidden sm:inline">|</span>
