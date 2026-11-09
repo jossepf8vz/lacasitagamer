@@ -580,6 +580,77 @@ const CATEGORIES = [
   { name: 'Clásicos', icon: Cpu, color: 'from-emerald-500 to-green-600' }
 ];
 
+const SOCIAL_PROOF_ACTIVITIES = [
+  { buyer: 'Carlos M.', gameId: 'g-steam-20', variantId: 'v-s20-glo', icon: '🔥' },
+  { buyer: 'José R.', gameId: 'g-xbox-20', variantId: 'v-x20-us', icon: '🎮' },
+  { buyer: 'Andrea P.', gameId: 'g-psn-25', variantId: 'v-ps25-us', icon: '✨' },
+  { buyer: 'Luis F.', gameId: 'g-nin-50', variantId: 'v-n50-us', icon: '🕹️' }
+];
+
+function RecentActivityNotification({
+  onProductClick,
+}: {
+  onProductClick: (gameId: string) => void;
+}) {
+  const [activityIndex, setActivityIndex] = useState(0);
+  const [isVisible, setIsVisible] = useState(true);
+
+  useEffect(() => {
+    let transitionTimer: ReturnType<typeof setTimeout>;
+    const rotationTimer = setInterval(() => {
+      setIsVisible(false);
+      transitionTimer = setTimeout(() => {
+        setActivityIndex((index) => (index + 1) % SOCIAL_PROOF_ACTIVITIES.length);
+        setIsVisible(true);
+      }, 350);
+    }, 6000);
+
+    return () => {
+      clearInterval(rotationTimer);
+      clearTimeout(transitionTimer);
+    };
+  }, []);
+
+  const activity = SOCIAL_PROOF_ACTIVITIES[activityIndex];
+  const game = MOCK_GAMES.find((item) => item.id === activity.gameId);
+  const variant = game?.variants.find((item) => item.id === activity.variantId);
+
+  if (!game || !variant) {
+    return null;
+  }
+
+  return (
+    <aside
+      aria-label="Actividad de demostración"
+      aria-live="polite"
+      className={`fixed bottom-20 left-4 z-30 w-[min(22rem,calc(100vw-2rem))] md:bottom-6 md:left-6 transition-all duration-300 ease-out motion-reduce:transition-none ${
+        isVisible ? 'translate-y-0 opacity-100' : 'translate-y-3 opacity-0'
+      }`}
+    >
+      <button
+        type="button"
+        onClick={() => onProductClick(game.id)}
+        className="w-full rounded-2xl border border-purple-400/30 bg-slate-950/90 p-3 text-left shadow-xl shadow-purple-950/40 backdrop-blur-xl transition hover:border-purple-400/70 hover:bg-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-400"
+        aria-label={`Actividad simulada: ${activity.buyer}, ${game.title}, plataforma ${variant.platform}. Ir al producto.`}
+      >
+        <span className="mb-1.5 flex items-center gap-1.5 text-[9px] font-black uppercase tracking-wider text-purple-300">
+          <Activity className="h-3 w-3 text-cyan-300" />
+          Ejemplo · actividad simulada
+        </span>
+        <span className="flex items-start gap-2 text-xs leading-relaxed text-slate-200">
+          <span aria-hidden="true" className="text-sm">{activity.icon}</span>
+          <span>
+            <strong className="text-white">{activity.buyer}</strong>
+            {' seleccionó '}
+            <strong className="text-cyan-200">{game.title}</strong>
+            <span className="block text-[11px] text-slate-400">{variant.platform}</span>
+          </span>
+        </span>
+      </button>
+    </aside>
+  );
+}
+
 // ============================================================================
 // 2. COMPONENTE PRINCIPAL
 // ============================================================================
@@ -767,6 +838,22 @@ export default function App() {
 
   const handleVariantSelect = (gameId, variantId) => {
     setSelectedVariants(prev => ({ ...prev, [gameId]: variantId }));
+  };
+
+  const handleActivityProductClick = (gameId) => {
+    setActiveTab('home');
+    setSelectedCategory('Todos');
+    setSelectedSubCategory('Todas');
+    setSearchQuery('');
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        document.getElementById(`product-${gameId}`)?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'center',
+        });
+      });
+    });
   };
 
   const addToCart = (game, variant) => {
@@ -1391,7 +1478,8 @@ export default function App() {
                   return (
                     <div 
                       key={game.id}
-                      className="bg-slate-900/90 border border-slate-800 hover:border-purple-500/50 rounded-2xl overflow-hidden shadow-lg transition flex flex-col justify-between"
+                      id={`product-${game.id}`}
+                      className="scroll-mt-24 bg-slate-900/90 border border-slate-800 hover:border-purple-500/50 rounded-2xl overflow-hidden shadow-lg transition flex flex-col justify-between"
                     >
                       <div>
                         <div className="relative h-48 overflow-hidden bg-slate-950">
@@ -1694,6 +1782,8 @@ export default function App() {
           </button>
         </div>
       </nav>
+
+      <RecentActivityNotification onProductClick={handleActivityProductClick} />
 
     </div>
   );
