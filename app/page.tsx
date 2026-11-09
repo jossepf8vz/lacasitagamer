@@ -1,3 +1,4 @@
+'use client';
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
   ShoppingCart, Search, Tag, Gamepad2, ShieldCheck, Flame, 
