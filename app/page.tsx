@@ -1,5 +1,6 @@
 'use client';
 import React, { useState, useEffect, useMemo } from 'react';
+import { useRouter } from 'next/navigation';
 import { getSupabaseBrowserClient } from '../lib/supabase/browser';
 import { 
   ShoppingCart, Search, Tag, Gamepad2, ShieldCheck, Flame, 
@@ -684,6 +685,7 @@ function RecentActivityNotification({
 // ============================================================================
 
 export default function App() {
+  const router = useRouter();
   // Tasas Financieras
   const [bcvRate, setBcvRate] = useState<number | null>(null);
   const [bcvRateError, setBcvRateError] = useState<string | null>(null);
@@ -713,6 +715,8 @@ export default function App() {
   const [isAdminAuthenticated, setIsAdminAuthenticated] = useState(false);
   const [showAdminLoginModal, setShowAdminLoginModal] = useState(false);
   const [adminLoginForm, setAdminLoginForm] = useState({ email: '', password: '' });
+  const [adminLoginError, setAdminLoginError] = useState<string | null>(null);
+  const [isAdminLoginPending, setIsAdminLoginPending] = useState(false);
   const [adminTab, setAdminTab] = useState('sales'); // 'sales' | 'analytics'
   const [selectedSupplierVariantId, setSelectedSupplierVariantId] = useState(MOCK_GAMES[0].variants[0].id);
   const [supplierComparison, setSupplierComparison] = useState<SupplierComparisonResult | null>(null);
@@ -867,9 +871,15 @@ export default function App() {
           console.error('Error al restaurar la sesión de administración:', error);
           return;
         }
-        if (active && data.session?.user.app_metadata.role === 'admin') {
+        if (active && new URLSearchParams(window.location.search).get('tab') === 'admin') {
+          if (data.session?.user.app_metadata.role === 'admin') {
+            setIsAdminAuthenticated(true);
+            setActiveTab('admin');
+          } else {
+            setShowAdminLoginModal(true);
+          }
+        } else if (active && data.session?.user.app_metadata.role === 'admin') {
           setIsAdminAuthenticated(true);
-          setActiveTab('admin');
         }
       });
 
@@ -990,22 +1000,36 @@ export default function App() {
   // Login del Administrador
   const handleAdminLogin = async (e) => {
     e.preventDefault();
+    setAdminLoginError(null);
+    setIsAdminLoginPending(true);
+
     try {
       const { data, error } = await getSupabaseBrowserClient().auth.signInWithPassword({
         email: adminLoginForm.email,
         password: adminLoginForm.password,
       });
-      if (error) throw error;
+      if (error || !data.user) {
+        throw new Error('Credenciales incorrectas. Verifica el correo y la contraseña.');
+      }
       if (data.user.app_metadata.role !== 'admin') {
-        await getSupabaseBrowserClient().auth.signOut();
+        const { error: signOutError } = await getSupabaseBrowserClient().auth.signOut();
+        if (signOutError) console.error('No se pudo cerrar la sesión sin permisos de administrador:', signOutError);
         throw new Error('Esta cuenta no tiene permisos de administrador.');
       }
 
       setIsAdminAuthenticated(true);
       setShowAdminLoginModal(false);
       setActiveTab('admin');
+      router.push('/admin/dashboard');
     } catch (error) {
-      alert(error instanceof Error ? error.message : 'No se pudo iniciar sesión como administrador.');
+      const message = error instanceof Error ? error.message : '';
+      setAdminLoginError(
+        message.includes('Invalid path specified')
+          ? 'No se pudo conectar con Supabase. Verifica NEXT_PUBLIC_SUPABASE_URL en la configuración de producción.'
+          : message || 'No se pudo iniciar sesión. Revisa la configuración y vuelve a intentarlo.'
+      );
+    } finally {
+      setIsAdminLoginPending(false);
     }
   };
 
@@ -1013,11 +1037,12 @@ export default function App() {
   const handleAdminLogout = async () => {
     const { error } = await getSupabaseBrowserClient().auth.signOut();
     if (error) {
-      alert(`No se pudo cerrar la sesión: ${error.message}`);
+      setAdminLoginError(`No se pudo cerrar la sesión: ${error.message}`);
       return;
     }
     setIsAdminAuthenticated(false);
     setActiveTab('home');
+    router.push('/');
   };
 
   const refreshSupplierComparison = async () => {
@@ -1842,6 +1867,11 @@ export default function App() {
             </div>
 
             <form onSubmit={handleAdminLogin} className="space-y-3">
+              {adminLoginError && (
+                <p role="alert" className="rounded-lg border border-red-500/30 bg-red-950/30 p-2 text-xs text-red-300">
+                  {adminLoginError}
+                </p>
+              )}
               <div>
                 <label className="block text-[11px] text-slate-300 mb-1">Email Admin</label>
                 <input 
@@ -1849,7 +1879,10 @@ export default function App() {
                   required
                   placeholder="admin@lacasitagamer.com"
                   value={adminLoginForm.email}
-                  onChange={(e) => setAdminLoginForm({...adminLoginForm, email: e.target.value})}
+                  onChange={(e) => {
+                    setAdminLoginForm({...adminLoginForm, email: e.target.value});
+                    setAdminLoginError(null);
+                  }}
                   className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-xs text-white focus:border-purple-500 focus:outline-none"
                 />
               </div>
@@ -1861,13 +1894,16 @@ export default function App() {
                   required
                   placeholder="••••••"
                   value={adminLoginForm.password}
-                  onChange={(e) => setAdminLoginForm({...adminLoginForm, password: e.target.value})}
+                  onChange={(e) => {
+                    setAdminLoginForm({...adminLoginForm, password: e.target.value});
+                    setAdminLoginError(null);
+                  }}
                   className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-xs text-white focus:border-purple-500 focus:outline-none"
                 />
               </div>
 
-              <button type="submit" className="w-full bg-purple-600 hover:bg-purple-500 text-white font-bold py-2 rounded-xl text-xs transition">
-                Iniciar Sesión Admin
+              <button type="submit" disabled={isAdminLoginPending} className="w-full bg-purple-600 hover:bg-purple-500 disabled:cursor-wait disabled:opacity-60 text-white font-bold py-2 rounded-xl text-xs transition">
+                {isAdminLoginPending ? 'Verificando…' : 'Iniciar Sesión Admin'}
               </button>
             </form>
           </div>
