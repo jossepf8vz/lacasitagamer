@@ -6,3 +6,12 @@
 4. Inicia sesión con la cuenta administrativa, abre **Acceso Admin → Proveedores**, elige una variante y pulsa **Actualizar y comparar**. La comparación se guarda en Supabase y los clientes solo reciben `final_usd` y `final_bs`.
 
 Las URLs solo se consultan en HTTPS y los hosts están limitados a `g2a.com`, `eneba.com` y `eldorado.gg`. La extracción HTML puede no funcionar si un proveedor cambia su página o bloquea solicitudes; en ese caso se usa `fallback_cost_usd`, cuando está configurado. El enlace de compra abre el sitio del proveedor para que una persona revise y complete su compra.
+
+## Tasa Binance P2P
+
+1. Ejecuta `migrations/20261109160000_binance_exchange_rate.sql` en el SQL Editor de Supabase para crear el caché privado de tasas.
+2. Configura `CRON_SECRET` como variable de entorno en Vercel y en el entorno local si necesitas probar la ruta de cron. No la expongas con el prefijo `NEXT_PUBLIC_`.
+3. `vercel.json` programa `/api/cron/binance-rate` cada cinco minutos. El panel de administración también solicita una actualización al abrir Analíticas y lee la tasa y su fecha guardadas; la ruta privada requiere el rol admin.
+4. La tasa almacenada es la mediana de hasta diez ofertas válidas de venta USDT/VES devueltas por Binance P2P. La disponibilidad del cron programado depende del plan de Vercel; si el plan no admite esta frecuencia, configura un scheduler externo para llamar la misma ruta con `Authorization: Bearer <CRON_SECRET>`.
+
+La tasa se consulta y persiste únicamente en el servidor; no se incluye en el encabezado público de la tienda.

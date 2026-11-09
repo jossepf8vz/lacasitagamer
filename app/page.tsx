@@ -692,7 +692,10 @@ export default function App() {
   const [bcvRateError, setBcvRateError] = useState<string | null>(null);
   const [isBcvRateLoading, setIsBcvRateLoading] = useState(true);
   const [isBcvRateFromCache, setIsBcvRateFromCache] = useState(false);
-  const [binanceP2PRate] = useState(1050.25);
+  const [binanceP2PRate, setBinanceP2PRate] = useState<number | null>(null);
+  const [binanceP2PRateUpdatedAt, setBinanceP2PRateUpdatedAt] = useState<string | null>(null);
+  const [binanceP2PRateError, setBinanceP2PRateError] = useState<string | null>(null);
+  const [isBinanceP2PRateLoading, setIsBinanceP2PRateLoading] = useState(false);
   const [supplierPriceOverrides, setSupplierPriceOverrides] = useState<Record<string, { final_usd: number; final_bs: number }>>({});
   const [supplierPriceLoadError, setSupplierPriceLoadError] = useState<string | null>(null);
 
@@ -944,8 +947,90 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!isAdminAuthenticated || activeTab !== 'admin') return;
+
+    let active = true;
+    let refreshTimer: ReturnType<typeof setInterval> | undefined;
+    const controller = new AbortController();
+
+    const loadRate = async (refresh: boolean, accessToken: string) => {
+      const response = await fetch('/api/admin/binance-rate', {
+        method: refresh ? 'POST' : 'GET',
+        headers: { Authorization: `Bearer ${accessToken}` },
+        cache: 'no-store',
+        signal: controller.signal,
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? 'No se pudo consultar la tasa Binance.');
+      if (!active) return;
+
+      if (typeof data.rate === 'number' && Number.isFinite(data.rate) && data.rate > 0) {
+        setBinanceP2PRate(data.rate);
+      }
+      if (typeof data.updatedAt === 'string') setBinanceP2PRateUpdatedAt(data.updatedAt);
+      setBinanceP2PRateError(null);
+    };
+
+    const startRatePolling = async () => {
+      setIsBinanceP2PRateLoading(true);
+      try {
+        const { data, error } = await getSupabaseBrowserClient().auth.getSession();
+        if (error) throw error;
+        const accessToken = data.session?.access_token;
+        if (!accessToken) throw new Error('La sesión de administrador expiró. Inicia sesión nuevamente.');
+
+        try {
+          await loadRate(true, accessToken);
+        } catch (refreshError) {
+          if (!active || controller.signal.aborted) return;
+          const refreshMessage = refreshError instanceof Error
+            ? refreshError.message
+            : 'No se pudo actualizar la tasa Binance.';
+          try {
+            await loadRate(false, accessToken);
+            setBinanceP2PRateError(`No se pudo actualizar la tasa; se muestra el último valor guardado. ${refreshMessage}`);
+          } catch (readError) {
+            if (!active || controller.signal.aborted) return;
+            const readMessage = readError instanceof Error
+              ? readError.message
+              : 'No se pudo leer la tasa Binance guardada.';
+            setBinanceP2PRateError(`${refreshMessage} ${readMessage}`);
+          }
+        }
+        if (active) {
+          refreshTimer = setInterval(() => {
+            void getSupabaseBrowserClient().auth.getSession()
+              .then(({ data, error }) => {
+                if (error) throw error;
+                const currentAccessToken = data.session?.access_token;
+                if (!currentAccessToken) throw new Error('La sesión de administrador expiró. Inicia sesión nuevamente.');
+                return loadRate(false, currentAccessToken);
+              })
+              .catch((error: unknown) => {
+                if (!active || controller.signal.aborted) return;
+                setBinanceP2PRateError(error instanceof Error ? error.message : 'No se pudo consultar la tasa Binance.');
+              });
+          }, 60_000);
+        }
+      } catch (error) {
+        if (!active) return;
+        setBinanceP2PRateError(error instanceof Error ? error.message : 'No se pudo consultar la tasa Binance.');
+      } finally {
+        if (active) setIsBinanceP2PRateLoading(false);
+      }
+    };
+
+    void startRatePolling();
+    return () => {
+      active = false;
+      controller.abort();
+      if (refreshTimer) clearInterval(refreshTimer);
+    };
+  }, [activeTab, isAdminAuthenticated]);
+
   const bsfCoverageFactor = useMemo(
-    () => (bcvRate === null ? null : binanceP2PRate / bcvRate),
+    () => (bcvRate === null || binanceP2PRate === null ? null : binanceP2PRate / bcvRate),
     [binanceP2PRate, bcvRate]
   );
 
@@ -1239,9 +1324,6 @@ export default function App() {
             {bcvRate !== null && !isBcvRateFromCache && bcvRateError && (
               <span className="text-amber-300" title={bcvRateError}> (desactualizada)</span>
             )}
-            <span className="text-slate-500 hidden sm:inline">|</span>
-            <span className="text-cyan-300 font-semibold hidden sm:inline">Binance P2P:</span>
-            <span className="text-cyan-400 font-bold font-mono hidden sm:inline">{binanceP2PRate.toFixed(2)} Bs.</span>
           </div>
 
           <div className="flex items-center gap-3">
@@ -1461,7 +1543,17 @@ export default function App() {
                   </div>
                   <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-1">
                     <p className="text-xs text-slate-400">Tasa Binance P2P</p>
-                    <p className="text-xl font-bold font-mono text-cyan-300">{binanceP2PRate.toFixed(2)} Bs.</p>
+                    <p className="text-xl font-bold font-mono text-cyan-300">
+                      {binanceP2PRate === null
+                        ? (isBinanceP2PRateLoading ? 'Consultando...' : 'No disponible')
+                        : `${new Intl.NumberFormat('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(binanceP2PRate)} Bs./USDT`}
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      {binanceP2PRateUpdatedAt
+                        ? `Actualizada: ${new Intl.DateTimeFormat('es-VE', { dateStyle: 'short', timeStyle: 'medium' }).format(new Date(binanceP2PRateUpdatedAt))}`
+                        : 'Sin actualización registrada'}
+                    </p>
+                    {binanceP2PRateError && <p className="text-xs text-amber-300">{binanceP2PRateError}</p>}
                   </div>
                   <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-1">
                     <p className="text-xs text-slate-400">Factor Cobertura Brecha</p>
