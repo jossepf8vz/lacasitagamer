@@ -587,6 +587,8 @@ const FEATURED_OFFERS = [
   { gameId: 'g-nin-50', variantId: 'v-n50-us', icon: '🕹️', headline: 'Oferta gamer destacada' }
 ];
 
+const FEATURED_OFFER_INTERVALS = [5000, 55000, 105000];
+
 function RecentActivityNotification({
   onProductClick,
 }: {
@@ -596,34 +598,27 @@ function RecentActivityNotification({
   const [isVisible, setIsVisible] = useState(false);
 
   useEffect(() => {
-    const timers: ReturnType<typeof setTimeout>[] = [];
-    let nextOfferIndex = 2;
-    let rotationTimer: ReturnType<typeof setTimeout>;
+    let nextOfferIndex = 0;
+    let nextIntervalIndex = 0;
+    let notificationTimer: ReturnType<typeof setTimeout>;
+    let hideTimer: ReturnType<typeof setTimeout>;
 
-    const scheduleOffer = (index: number, delay: number) => {
-      timers.push(setTimeout(() => {
-        setActivityIndex(index);
-        setIsVisible(true);
-        timers.push(setTimeout(() => setIsVisible(false), 8000));
-      }, delay));
-    };
-
-    const rotateOffer = () => {
-      scheduleOffer(nextOfferIndex, 0);
+    const showNextOffer = () => {
+      notificationTimer = setTimeout(() => {
+      setActivityIndex(nextOfferIndex);
+      setIsVisible(true);
+      hideTimer = setTimeout(() => setIsVisible(false), 8000);
       nextOfferIndex = (nextOfferIndex + 1) % FEATURED_OFFERS.length;
-      rotationTimer = setTimeout(rotateOffer, 105000);
+      nextIntervalIndex = (nextIntervalIndex + 1) % FEATURED_OFFER_INTERVALS.length;
+      showNextOffer();
+      }, FEATURED_OFFER_INTERVALS[nextIntervalIndex]);
     };
 
-    scheduleOffer(0, 5000);
-    scheduleOffer(1, 55000);
-    const firstRotationTimer = setTimeout(() => {
-      rotateOffer();
-    }, 160000);
+    showNextOffer();
 
     return () => {
-      timers.forEach(clearTimeout);
-      clearTimeout(firstRotationTimer);
-      clearTimeout(rotationTimer);
+      clearTimeout(notificationTimer);
+      clearTimeout(hideTimer);
     };
   }, []);
 
@@ -639,7 +634,7 @@ function RecentActivityNotification({
     <aside
       aria-label="Ofertas destacadas"
       aria-live="polite"
-      className={`fixed bottom-4 left-4 z-50 w-[min(22rem,calc(100vw-2rem))] transition-all duration-300 ease-out motion-reduce:transition-none ${
+      className={`fixed top-24 right-4 z-50 w-[min(22rem,calc(100vw-2rem))] transition-all duration-300 ease-out motion-reduce:transition-none ${
         isVisible ? 'translate-y-0 opacity-100' : 'translate-y-3 opacity-0'
       }`}
     >
