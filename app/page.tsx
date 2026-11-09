@@ -645,7 +645,7 @@ export default function App() {
       paymentMethod: 'Pago Móvil (Banesco)',
       referenceNumber: '8849102',
       totalUsd: 21.50,
-      totalBs: '22,580.37',
+      totalBs: 22581,
       status: 'Aprobado',
       items: [
         {
@@ -669,7 +669,7 @@ export default function App() {
       paymentMethod: 'Pago Móvil (Mercantil)',
       referenceNumber: '4910023',
       totalUsd: 59.99,
-      totalBs: '63,004.50',
+      totalBs: 63005,
       status: 'Pendiente',
       items: [
         {
@@ -745,13 +745,13 @@ export default function App() {
   );
 
   const calculateBsNumeric = (priceUsd) => {
-    return bcvRate === null ? null : priceUsd * bcvRate;
+    return bcvRate === null ? null : Math.ceil(priceUsd * bcvRate);
   };
 
   const calculateBs = (priceUsd) => {
     const totalBs = calculateBsNumeric(priceUsd);
     if (totalBs === null) return '—';
-    return new Intl.NumberFormat('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(totalBs);
+    return new Intl.NumberFormat('es-VE', { maximumFractionDigits: 0 }).format(totalBs);
   };
 
   const totalCartUsd = cart.reduce((acc, item) => acc + (item.priceUsd * item.quantity), 0);
@@ -826,6 +826,11 @@ export default function App() {
   // Procesar Compra y Generación de Puntos Gamer Cash
   const handleProcessOrder = (e) => {
     e.preventDefault();
+    if (bcvRate === null) {
+      alert('No se puede procesar el pedido hasta obtener la tasa oficial BCV.');
+      return;
+    }
+
     if (!checkoutForm.email || !checkoutForm.phone || !checkoutForm.referenceNumber) {
       alert("Por favor completa todos los campos del reporte de pago.");
       return;
@@ -865,7 +870,7 @@ export default function App() {
         paymentMethod: checkoutForm.paymentMethod,
         referenceNumber: checkoutForm.referenceNumber,
         totalUsd: finalCheckoutUsd,
-        totalBs: calculateBs(finalCheckoutUsd),
+        totalBs: calculateBsNumeric(finalCheckoutUsd),
         status: 'Aprobado',
         items: itemsWithArbitrage,
         generatedKeys: cart.map(item => ({
@@ -1090,7 +1095,7 @@ export default function App() {
                         </div>
                         <div className="text-right">
                           <p className="text-slate-400">Total USD: <strong className="text-white font-mono">${sale.totalUsd.toFixed(2)}</strong></p>
-                          <p className="text-slate-400">Total Bolívares: <strong className="text-cyan-300 font-mono">{sale.totalBs} Bs.</strong></p>
+                          <p className="text-slate-400">Total Bolívares: <strong className="text-cyan-300 font-mono">{new Intl.NumberFormat('es-VE', { maximumFractionDigits: 0 }).format(sale.totalBs)} Bs.</strong></p>
                         </div>
                       </div>
 
