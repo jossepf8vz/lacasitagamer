@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { refreshBcvRate } from '../../../../lib/pricing/bcv';
+import { getStoredBcvRate, refreshBcvRate } from '../../../../lib/pricing/bcv';
 import { fetchSupplierOffer, type SupplierName } from '../../../../lib/pricing/suppliers';
 import { getSupabaseServerClient } from '../../../../lib/supabase/server';
 
@@ -10,6 +10,16 @@ export const maxDuration = 30;
 const VARIANT_ID = 'v-s10-glo';
 const PRODUCT_ID = 'g-steam-10';
 const PRODUCT_NAME = 'Steam Gift Card $10';
+const FALLBACK_SUPPLIERS: SupplierRow[] = [
+  {
+    supplier: 'eneba',
+    url: 'https://www.eneba.com/latam/steam-gift-card-steam-wallet-gift-card-10-usd-steam-key-united-states',
+  },
+  {
+    supplier: 'g2a',
+    url: 'https://www.g2a.com/es/steam-gift-card-10-usd-steam-key-global-i10000000258127',
+  },
+];
 
 type SupplierRow = {
   supplier: SupplierName;
@@ -58,49 +68,105 @@ export async function GET(request: Request) {
   }
 
   let bcvRate: number | null = null;
+  let bcvRateIsStale = false;
   const errors: string[] = [];
+  const warnings: string[] = [];
 
   try {
     let supabase: ReturnType<typeof getSupabaseServerClient> | null = null;
-    let suppliers: SupplierRow[] = [];
+    let suppliers: SupplierRow[] = FALLBACK_SUPPLIERS;
     let pricingConfig: PricingRow | null = null;
+    let shouldPersistSupplierFallback = false;
     try {
       supabase = getSupabaseServerClient();
-      const { data: pricing, error: pricingError } = await supabase
-        .from('product_pricing')
-        .select('variant_id, product_id, profit_margin_percent')
-        .eq('variant_id', VARIANT_ID)
-        .eq('product_id', PRODUCT_ID)
-        .maybeSingle();
-
-      if (pricingError) throw pricingError;
-      if (!pricing) throw new Error('No existe la configuración de Steam Gift Card $10.');
-      pricingConfig = pricing as PricingRow;
-
-      const { data, error: suppliersError } = await supabase
-        .from('product_supplier_urls')
-        .select('supplier, url')
-        .eq('variant_id', VARIANT_ID)
-        .in('supplier', ['eneba', 'g2a']);
-
-      if (suppliersError) throw suppliersError;
-      suppliers = (data ?? []) as SupplierRow[];
-      if (suppliers.length === 0) throw new Error('No hay proveedores configurados para Steam Gift Card $10.');
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'No se pudieron cargar los proveedores.';
-      errors.push(`Configuración: ${message}`);
-      console.error('Error al cargar proveedores para la prueba de Steam:', error);
+      const message = error instanceof Error ? error.message : 'No se pudo inicializar Supabase.';
+      errors.push(`Supabase cliente: ${message}`);
+      console.error('[cron/test-steam][supabase-client] No se pudo inicializar Supabase:', error);
+    }
+
+    if (supabase) {
+      try {
+        const { data: pricing, error: pricingError } = await supabase
+          .from('product_pricing')
+          .select('variant_id, product_id, profit_margin_percent')
+          .eq('variant_id', VARIANT_ID)
+          .eq('product_id', PRODUCT_ID)
+          .maybeSingle();
+
+        if (pricingError) throw pricingError;
+        if (!pricing) throw new Error(`No existe la configuración ${VARIANT_ID}/${PRODUCT_ID}.`);
+        pricingConfig = pricing as PricingRow;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'No se pudo leer la configuración del producto.';
+        errors.push(`Configuración de producto: ${message}`);
+        console.error('[cron/test-steam][product-config] Falló la consulta de product_pricing:', error);
+      }
+
+      try {
+        const { data, error: suppliersError } = await supabase
+          .from('product_supplier_urls')
+          .select('supplier, url')
+          .eq('variant_id', VARIANT_ID)
+          .in('supplier', ['eneba', 'g2a']);
+
+        if (suppliersError) throw suppliersError;
+
+        const configuredSuppliers = (data ?? []) as SupplierRow[];
+        const supplierByName = new Map(configuredSuppliers.map((supplier) => [supplier.supplier, supplier]));
+        suppliers = FALLBACK_SUPPLIERS.map((fallback) => supplierByName.get(fallback.supplier) ?? fallback);
+        shouldPersistSupplierFallback = configuredSuppliers.length < FALLBACK_SUPPLIERS.length;
+
+        if (configuredSuppliers.length === 0) {
+          warnings.push(`No hay URLs configuradas para ${VARIANT_ID}; se usarán las URLs de respaldo.`);
+          console.warn(`[cron/test-steam][supplier-config] Sin filas para ${VARIANT_ID}; usando URLs Eneba/G2A de respaldo.`);
+        } else if (configuredSuppliers.length < FALLBACK_SUPPLIERS.length) {
+          warnings.push('La configuración de proveedores estaba incompleta; se completó con URLs de respaldo.');
+          console.warn('[cron/test-steam][supplier-config] Faltaban proveedores configurados; se completará la lista.');
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'No se pudieron leer ni guardar las URLs.';
+        console.error('[cron/test-steam][supplier-config] Falló la consulta o persistencia de URLs:', error);
+        warnings.push(`No se pudieron leer las URLs de Supabase (${message}); se usarán URLs de respaldo.`);
+        suppliers = FALLBACK_SUPPLIERS;
+        shouldPersistSupplierFallback = true;
+      }
+
+      if (shouldPersistSupplierFallback) {
+        try {
+          const { error: defaultsError } = await supabase
+            .from('product_supplier_urls')
+            .upsert(suppliers, { onConflict: 'variant_id,supplier' });
+          if (defaultsError) throw defaultsError;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'No se pudieron guardar las URLs de respaldo.';
+          errors.push(`Persistencia de URLs de respaldo: ${message}`);
+          console.error('[cron/test-steam][supplier-config-save] No se pudieron persistir las URLs de respaldo:', error);
+        }
+      }
     }
 
     const checkedAt = new Date().toISOString();
     const [rateResult, results] = await Promise.all([
       refreshBcvRate()
-        .then(({ rate }) => ({ rate }))
-        .catch((error: unknown) => {
+        .then(({ rate }) => ({ rate, stale: false }))
+        .catch(async (error: unknown) => {
           const message = error instanceof Error ? error.message : 'No se pudo actualizar la tasa BCV.';
-          errors.push(`BCV: ${message}`);
-          console.error('Error al actualizar la tasa BCV para la prueba de Steam:', error);
-          return { rate: null };
+          console.error('[cron/test-steam][bcv-refresh] Falló la actualización externa/persistencia BCV:', error);
+          try {
+            const storedRate = await getStoredBcvRate();
+            if (storedRate) {
+              warnings.push(`No se pudo actualizar BCV (${message}); se usará la tasa guardada.`);
+              console.warn('[cron/test-steam][bcv-fallback] Se usará la última tasa BCV válida guardada.');
+              return { rate: storedRate.rate, stale: true };
+            }
+            throw new Error('No hay una tasa BCV guardada.');
+          } catch (storedError) {
+            const storedMessage = storedError instanceof Error ? storedError.message : 'Falló la lectura de la tasa BCV guardada.';
+            errors.push(`Tasa BCV: ${message}; respaldo: ${storedMessage}`);
+            console.error('[cron/test-steam][bcv-fallback] No se pudo leer una tasa BCV guardada:', storedError);
+            return { rate: null, stale: true };
+          }
         }),
       Promise.all(suppliers.map(async (supplier): Promise<SupplierCheck> => {
         try {
@@ -117,7 +183,7 @@ export async function GET(request: Request) {
           };
         } catch (error) {
           const message = error instanceof Error ? error.message : 'Error desconocido consultando al proveedor.';
-          console.error(`Error al consultar ${supplier.supplier} para la prueba de Steam:`, error);
+          console.error(`[cron/test-steam][supplier:${supplier.supplier}] Falló la extracción de oferta:`, error);
           return {
             variant_id: VARIANT_ID,
             supplier: supplier.supplier,
@@ -132,6 +198,7 @@ export async function GET(request: Request) {
       })),
     ]);
     bcvRate = rateResult.rate;
+    bcvRateIsStale = rateResult.stale;
 
     if (supabase && results.length > 0) {
       try {
@@ -141,8 +208,8 @@ export async function GET(request: Request) {
         if (saveError) throw saveError;
       } catch (error) {
         const message = error instanceof Error ? error.message : 'No se pudieron guardar los precios.';
-        errors.push(`Supabase: ${message}`);
-        console.error('Error al guardar precios para la prueba de Steam:', error);
+        errors.push(`Guardado de ofertas: ${message}`);
+        console.error('[cron/test-steam][offer-save] Falló el upsert de supplier_price_checks:', error);
       }
     }
 
@@ -154,16 +221,19 @@ export async function GET(request: Request) {
           : currentBest,
       null
     );
-    const comparisonComplete = results.length === 2 && results.every((result) => result.price_usd !== null);
+    const comparisonComplete = results.length === FALLBACK_SUPPLIERS.length
+      && FALLBACK_SUPPLIERS.every((supplier) => results.some((result) => result.supplier === supplier.supplier && result.price_usd !== null));
     const best = comparisonComplete ? availableBest : null;
 
     if (!comparisonComplete) {
-      errors.push('La comparación Eneba/G2A está incompleta; no se actualizó el precio de la tienda.');
+      errors.push('Comparación Eneba/G2A: falta una oferta verificable; no se actualizará el precio final.');
+      console.error('[cron/test-steam][comparison] Comparación incompleta; se conserva el último precio guardado.');
     }
 
     let finalPriceUsd: number | null = null;
     let finalPriceBs: number | null = null;
     let profitMarginPercent: number | null = null;
+
     if (best && bcvRate !== null && supabase && pricingConfig) {
       try {
         profitMarginPercent = Number(pricingConfig.profit_margin_percent);
@@ -183,22 +253,26 @@ export async function GET(request: Request) {
             price_checked_at: checkedAt,
             updated_at: checkedAt,
           })
-          .eq('variant_id', VARIANT_ID);
+          .eq('variant_id', VARIANT_ID)
+          .eq('product_id', PRODUCT_ID);
         if (updateError) throw updateError;
       } catch (error) {
         const message = error instanceof Error ? error.message : 'No se pudo guardar el precio calculado.';
-        errors.push(`Precio calculado: ${message}`);
-        console.error('Error al guardar el precio calculado de Steam:', error);
+        errors.push(`Guardado de precio final: ${message}`);
+        console.error('[cron/test-steam][price-save] Falló la actualización de precio/margen/BCV:', error);
       }
     } else if (!best) {
-      errors.push('No hay precios elegibles para calcular el precio final.');
+      console.error('[cron/test-steam][calculation] Sin comparación completa; no se calcula el precio final.');
     } else if (bcvRate === null) {
-      errors.push('No se calculó el precio final porque la tasa BCV no está disponible.');
+      console.error('[cron/test-steam][calculation] Falta una tasa BCV válida para la conversión.');
+    } else if (!pricingConfig) {
+      console.error('[cron/test-steam][calculation] Falta la configuración de margen de product_pricing.');
     }
 
     return jsonResponse({
       success: errors.length === 0 && best !== null && bcvRate !== null && finalPriceBs !== null,
       bcv_rate: bcvRate,
+      bcv_rate_stale: bcvRateIsStale,
       product: PRODUCT_NAME,
       best_price_usd: best?.price_usd ?? null,
       provider: best
@@ -214,7 +288,9 @@ export async function GET(request: Request) {
         seller_name: result.seller_name,
         offer_url: result.offer_url,
         status: result.price_usd === null ? 'no disponible' : 'disponible',
+        ...(result.error ? { error: result.error } : {}),
       })),
+      ...(warnings.length > 0 ? { warnings } : {}),
       ...(errors.length > 0 ? { errors } : {}),
     });
   } catch (error) {
