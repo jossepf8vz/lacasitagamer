@@ -27,6 +27,7 @@ type SupplierRow = {
 };
 
 type PricingRow = {
+  product_id: string;
   profit_margin_percent: number;
 };
 
@@ -92,11 +93,13 @@ export async function GET(request: Request) {
           .from('product_pricing')
           .select('variant_id, product_id, profit_margin_percent')
           .eq('variant_id', VARIANT_ID)
-          .eq('product_id', PRODUCT_ID)
           .maybeSingle();
 
         if (pricingError) throw pricingError;
-        if (!pricing) throw new Error(`No existe la configuración ${VARIANT_ID}/${PRODUCT_ID}.`);
+        if (!pricing) throw new Error(`No existe la configuración de la variante Steam ${VARIANT_ID}.`);
+        if (pricing.product_id !== PRODUCT_ID) {
+          throw new Error(`La variante ${VARIANT_ID} está asociada a ${pricing.product_id}, no a ${PRODUCT_ID}.`);
+        }
         pricingConfig = pricing as PricingRow;
       } catch (error) {
         const message = error instanceof Error ? error.message : 'No se pudo leer la configuración del producto.';

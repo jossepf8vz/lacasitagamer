@@ -16,7 +16,7 @@ Las URLs solo se consultan en HTTPS y los hosts están limitados a `g2a.com`, `e
 
 ## Tasa BCV y prueba de Steam
 
-- `/api/bcv-rate` consulta en orden `ve.dolarapi.com/v1/dolares/bcv` y `pydolarvenezuela-api.vercel.app/api/v1/dollar?page=bcv`. Guarda la tasa en `product_pricing.bcv_rate` y en `exchange_rates` (`bcv_official_ves`), recalculando `final_price_bs` cuando existe `final_price_usd`.
+- `/api/bcv-rate` consulta en orden `ve.dolarapi.com/v1/dolares/oficial` y `pydolarve.org/api/v1/dollar?page=bcv`. Guarda la tasa en `product_pricing.bcv_rate` y en `exchange_rates` (`bcv_official_ves`), recalculando `final_price_bs` cuando existe `final_price_usd`.
 - `/api/cron/test-steam` actualiza la tasa BCV, consulta los proveedores configurados para `v-s10-glo` (Steam Gift Card $10) y guarda los resultados en `supplier_price_checks`. Requiere `Authorization: Bearer <CRON_SECRET>`; solo declara éxito si Eneba y G2A devuelven ofertas válidas y se guarda el precio calculado.
 - Binance P2P permanece privado; la tasa BCV se expone únicamente a través de la API pública utilizada por el banner.
 
@@ -27,4 +27,4 @@ Las URLs solo se consultan en HTTPS y los hosts están limitados a `g2a.com`, `e
 3. El parser solo acepta ofertas no patrocinadas que estén presentes en estado JSON público y cuya moneda USD se pueda verificar. No simula un navegador ni sortea desafíos; si la página no expone ofertas parseables, informa proveedor no disponible y no actualiza el precio ganador.
 4. El porcentaje se toma de `product_pricing.profit_margin_percent` (33% para Steam). La tienda lee el snapshot final guardado por el cron y calcula su equivalente en Bs. con la tasa BCV; el panel muestra el vendedor y enlace disponibles al actualizar la comparación.
 
-La ruta `/api/bcv-rate` consulta las dos fuentes JSON en orden y, si ambas fallan, usa la última tasa válida de `product_pricing` (con `exchange_rates` como respaldo compatible con datos guardados previamente). Devuelve `bcv_rate` y `source`; el checkout también consulta esta ruta cuando todavía no tiene una tasa en memoria y solo detiene el pedido cuando no hay ninguna tasa válida disponible.
+La ruta `/api/bcv-rate` consulta las dos fuentes JSON en orden y, si ambas fallan, usa la última tasa válida de `product_pricing` (priorizando la variante Steam) o `exchange_rates` (`currency = 'USD'` cuando existe esa columna, y `source = 'bcv_official_ves'` para el esquema actual). Devuelve `bcv_rate` y `source`; el checkout también consulta esta ruta cuando todavía no tiene una tasa en memoria y solo detiene el pedido cuando no hay ninguna tasa válida disponible.

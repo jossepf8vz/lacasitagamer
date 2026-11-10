@@ -3,17 +3,18 @@ import { getSupabaseServerClient } from '../supabase/server';
 const BCV_SOURCES = [
   {
     name: 've.dolarapi.com',
-    url: 'https://ve.dolarapi.com/v1/dolares/bcv',
+    url: 'https://ve.dolarapi.com/v1/dolares/oficial',
     rateKeys: ['promedio'],
   },
   {
-    name: 'pydolarvenezuela-api.vercel.app',
-    url: 'https://pydolarvenezuela-api.vercel.app/api/v1/dollar?page=bcv',
+    name: 'pydolarve.org',
+    url: 'https://pydolarve.org/api/v1/dollar?page=bcv',
     rateKeys: ['promedio', 'bcv', 'price', 'valor', 'value', 'rate', 'venta', 'tasa'],
   },
 ] as const;
 const BCV_RATE_SOURCE = 'bcv_official_ves';
 const SOURCE_TIMEOUT_MS = 6000;
+const STEAM_VARIANT_ID = 'v-s10-glo';
 
 type PricingRow = {
   variant_id: string;
@@ -97,11 +98,28 @@ export async function getStoredBcvRate(): Promise<StoredRate | null> {
   const supabase = getSupabaseServerClient();
   let pricingReadError: string | null = null;
   try {
+    const { data: steamPricing, error: steamPricingError } = await supabase
+      .from('product_pricing')
+      .select('bcv_rate, updated_at')
+      .eq('variant_id', STEAM_VARIANT_ID)
+      .maybeSingle();
+
+    if (steamPricingError) throw steamPricingError;
+    const steamRate = toValidRate(steamPricing?.bcv_rate);
+    if (steamRate !== null) {
+      return {
+        rate: steamRate,
+        updatedAt: steamPricing.updated_at,
+        source: 'supabase:product_pricing:v-s10-glo',
+      };
+    }
+
     const { data: pricingRows, error: pricingError } = await supabase
       .from('product_pricing')
       .select('bcv_rate, updated_at')
       .not('bcv_rate', 'is', null)
-      .order('updated_at', { ascending: false });
+      .order('updated_at', { ascending: false })
+      .limit(20);
 
     if (pricingError) throw pricingError;
 
@@ -120,23 +138,50 @@ export async function getStoredBcvRate(): Promise<StoredRate | null> {
     console.warn(`[bcv][stored-rate:product_pricing] No se pudo leer el respaldo: ${pricingReadError}`);
   }
 
-  let exchangeRate: { rate: number | string; updated_at: string } | null;
+  let exchangeRate: { rate: number | string; updated_at: string } | null = null;
+  let currencyLookupError: string | null = null;
   try {
-    const { data, error: exchangeRateError } = await supabase
+    const { data, error } = await supabase
       .from('exchange_rates')
       .select('rate, updated_at')
-      .eq('source', BCV_RATE_SOURCE)
+      .eq('currency', 'USD')
+      .order('updated_at', { ascending: false })
+      .limit(1)
       .maybeSingle();
 
-    if (exchangeRateError) throw exchangeRateError;
+    if (error) throw error;
     exchangeRate = data;
   } catch (error) {
-    const exchangeReadError = errorMessage(error);
-    throw new Error(
-      `No se pudo leer product_pricing (${pricingReadError ?? 'sin tasa válida'}) ni exchange_rates (${exchangeReadError}).`
+    currencyLookupError = errorMessage(error);
+    console.warn(
+      `[bcv][stored-rate:exchange_rates.currency] No se pudo consultar currency='USD'; se probará el esquema source: ${currencyLookupError}`
     );
   }
-  if (!exchangeRate) return null;
+
+  if (!exchangeRate) {
+    try {
+      const { data, error } = await supabase
+        .from('exchange_rates')
+        .select('rate, updated_at')
+        .eq('source', BCV_RATE_SOURCE)
+        .maybeSingle();
+
+      if (error) throw error;
+      exchangeRate = data;
+    } catch (error) {
+      const sourceLookupError = errorMessage(error);
+      throw new Error(
+        `No se pudo leer product_pricing (${pricingReadError ?? 'sin tasa válida'}), exchange_rates.currency (${currencyLookupError ?? 'sin tasa válida'}) ni exchange_rates.source (${sourceLookupError}).`
+      );
+    }
+  }
+
+  if (!exchangeRate) {
+    if (currencyLookupError) {
+      console.warn(`[bcv][stored-rate] No se encontró tasa BCV guardada: ${currencyLookupError}`);
+    }
+    return null;
+  }
 
   const rate = toValidRate(exchangeRate.rate);
   if (rate === null) {
