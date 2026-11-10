@@ -1134,6 +1134,13 @@ export default function App() {
 
   const priceForVariant = (variant) => supplierPriceOverrides[variant.id]?.final_usd ?? variant.priceUsd;
   const priceBsForVariant = (variant) => {
+    const storedPriceBs = supplierPriceOverrides[variant.id]?.final_bs;
+    if (storedPriceBs !== undefined) {
+      return new Intl.NumberFormat('es-VE', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }).format(storedPriceBs);
+    }
     return calculateBs(priceForVariant(variant));
   };
 
