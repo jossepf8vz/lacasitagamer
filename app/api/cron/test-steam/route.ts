@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getStoredBcvRate, refreshBcvRate } from '../../../../lib/pricing/bcv';
+import { refreshBcvRate } from '../../../../lib/pricing/bcv';
 import { fetchSupplierOffer, type SupplierName } from '../../../../lib/pricing/suppliers';
 import { getSupabaseServerClient } from '../../../../lib/supabase/server';
 
@@ -149,24 +149,18 @@ export async function GET(request: Request) {
     const checkedAt = new Date().toISOString();
     const [rateResult, results] = await Promise.all([
       refreshBcvRate()
-        .then(({ rate }) => ({ rate, stale: false }))
-        .catch(async (error: unknown) => {
-          const message = error instanceof Error ? error.message : 'No se pudo actualizar la tasa BCV.';
-          console.error('[cron/test-steam][bcv-refresh] Falló la actualización externa/persistencia BCV:', error);
-          try {
-            const storedRate = await getStoredBcvRate();
-            if (storedRate) {
-              warnings.push(`No se pudo actualizar BCV (${message}); se usará la tasa guardada.`);
-              console.warn('[cron/test-steam][bcv-fallback] Se usará la última tasa BCV válida guardada.');
-              return { rate: storedRate.rate, stale: true };
-            }
-            throw new Error('No hay una tasa BCV guardada.');
-          } catch (storedError) {
-            const storedMessage = storedError instanceof Error ? storedError.message : 'Falló la lectura de la tasa BCV guardada.';
-            errors.push(`Tasa BCV: ${message}; respaldo: ${storedMessage}`);
-            console.error('[cron/test-steam][bcv-fallback] No se pudo leer una tasa BCV guardada:', storedError);
-            return { rate: null, stale: true };
+        .then((result) => {
+          if (result.stale) {
+            warnings.push('warning' in result ? result.warning : 'Se usó la última tasa BCV guardada.');
+            console.warn('[cron/test-steam][bcv] Se usará la tasa BCV guardada en Supabase.');
           }
+          return { rate: result.rate, stale: result.stale };
+        })
+        .catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : 'No se pudo obtener una tasa BCV válida.';
+          errors.push(`Tasa BCV: ${message}`);
+          console.error('[cron/test-steam][bcv] No se obtuvo tasa actual ni respaldo:', error);
+          return { rate: null, stale: true };
         }),
       Promise.all(suppliers.map(async (supplier): Promise<SupplierCheck> => {
         try {

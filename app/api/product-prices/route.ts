@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { refreshBcvRate } from '../../../lib/pricing/bcv';
 import { getSupabaseServerClient } from '../../../lib/supabase/server';
 
 export const runtime = 'nodejs';
@@ -88,20 +89,8 @@ export async function GET(request: Request) {
     }).filter((record): record is { variantId: string; finalUsd: number } => record !== null);
 
     if (priceRecords.length > 0) {
-      const rateResponse = await fetch('https://ve.dolarapi.com/v1/dolares/oficial', { cache: 'no-store' });
-      if (!rateResponse.ok) throw new Error(`La API BCV respondió con el estado ${rateResponse.status}.`);
-      const rateData: unknown = await rateResponse.json();
-      if (
-        typeof rateData !== 'object'
-        || rateData === null
-        || !('promedio' in rateData)
-        || typeof rateData.promedio !== 'number'
-        || !Number.isFinite(rateData.promedio)
-        || rateData.promedio <= 0
-      ) {
-        throw new Error('La API BCV no devolvió una tasa válida.');
-      }
-      bcvRate = rateData.promedio;
+      const rateResult = await refreshBcvRate();
+      bcvRate = rateResult.rate;
     }
 
     for (const price of priceRecords) {

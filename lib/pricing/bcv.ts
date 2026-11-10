@@ -6,11 +6,13 @@ const BCV_RATE_SOURCE = 'bcv_official_ves';
 type BcvResponse = {
   promedio?: unknown;
   price?: unknown;
+  venta?: unknown;
 };
 
 export async function refreshBcvRate() {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10000);
+  let refreshError: unknown;
 
   try {
     const response = await fetch(BCV_OFFICIAL_URL, {
@@ -27,7 +29,7 @@ export async function refreshBcvRate() {
     }
 
     const record = data as BcvResponse;
-    const rawRate = record.promedio ?? record.price;
+    const rawRate = record.promedio ?? record.price ?? record.venta;
     const rate = typeof rawRate === 'number' || typeof rawRate === 'string' ? Number(rawRate) : NaN;
     if (!Number.isFinite(rate) || rate <= 0) {
       throw new Error('La API BCV no devolvió una tasa válida.');
@@ -45,10 +47,39 @@ export async function refreshBcvRate() {
       .single();
 
     if (error) throw error;
-    return { rate: Number(savedRate.rate), updatedAt: savedRate.updated_at };
+    return {
+      success: true as const,
+      rate: Number(savedRate.rate),
+      updatedAt: savedRate.updated_at,
+      stale: false,
+    };
+  } catch (error) {
+    refreshError = error;
   } finally {
     clearTimeout(timeout);
   }
+
+  try {
+    const storedRate = await getStoredBcvRate();
+    if (storedRate) {
+      console.warn('Se devuelve la última tasa BCV válida guardada en Supabase.');
+      return {
+        success: true as const,
+        ...storedRate,
+        stale: true,
+        warning: 'No se pudo actualizar la tasa; se devuelve la última guardada.',
+      };
+    }
+  } catch (error) {
+    console.error('No se pudo leer la tasa BCV de respaldo en Supabase:', error);
+    throw new Error(
+      `Falló la actualización BCV (${errorMessage(refreshError)}); también falló la lectura del respaldo (${errorMessage(error)}).`
+    );
+  }
+
+  throw new Error(
+    `Falló la actualización BCV (${errorMessage(refreshError)}) y no existe una tasa guardada en Supabase.`
+  );
 }
 
 export async function getStoredBcvRate() {
@@ -67,4 +98,8 @@ export async function getStoredBcvRate() {
     throw new Error('La tasa BCV guardada en Supabase no es válida.');
   }
   return { rate, updatedAt: data.updated_at };
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : 'error desconocido';
 }
