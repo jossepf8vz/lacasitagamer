@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import { isAdminUser } from './admin';
 
 export function getSupabaseServerClient() {
   const rawUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
@@ -37,7 +38,7 @@ export async function requireAdmin(request: Request) {
 
   const supabase = getSupabaseServerClient();
   const { data, error } = await supabase.auth.getUser(token);
-  if (error || !data.user || data.user.app_metadata.role !== 'admin') {
+  if (error || !isAdminUser(data.user)) {
     return { user: null, error: 'La sesión no tiene permisos de administrador.' };
   }
 

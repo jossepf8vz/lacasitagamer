@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { getSupabaseBrowserClient } from '../lib/supabase/browser';
+import { isAdminUser } from '../lib/supabase/admin';
 import { 
   ShoppingCart, Search, Tag, Gamepad2, ShieldCheck, Flame, 
   Sparkles, Filter, X, Home, ShoppingBag, User, 
@@ -919,20 +920,20 @@ export default function App() {
           return;
         }
         if (active && new URLSearchParams(window.location.search).get('tab') === 'admin') {
-          if (data.session?.user.app_metadata.role === 'admin') {
+          if (isAdminUser(data.session?.user)) {
             setIsAdminAuthenticated(true);
             setActiveTab('admin');
           } else {
             setShowAdminLoginModal(true);
           }
-        } else if (active && data.session?.user.app_metadata.role === 'admin') {
+        } else if (active && isAdminUser(data.session?.user)) {
           setIsAdminAuthenticated(true);
         }
       });
 
       const { data } = supabase.auth.onAuthStateChange((_event, session) => {
         if (!active) return;
-        const isAdmin = session?.user.app_metadata.role === 'admin';
+        const isAdmin = isAdminUser(session?.user);
         setIsAdminAuthenticated(Boolean(isAdmin));
         if (!isAdmin && activeTab === 'admin') setActiveTab('home');
       });
@@ -1140,7 +1141,7 @@ export default function App() {
       if (error) throw error;
       if (!data.user) throw new Error('Supabase Auth no devolvió un usuario autenticado.');
 
-      if (data.user.app_metadata.role !== 'admin') {
+      if (!isAdminUser(data.user)) {
         const { error: signOutError } = await getSupabaseBrowserClient().auth.signOut();
         if (signOutError) console.error('No se pudo cerrar la sesión sin permisos de administrador:', signOutError);
         throw new Error('Acceso denegado: esta cuenta no tiene permisos de administrador');
