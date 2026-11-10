@@ -24,35 +24,28 @@ type PersistResult = {
 
 export async function refreshBcvRate() {
   const sourceErrors: string[] = [];
-  const apiKey = process.env.MONTOSVE_API_KEY;
-
-  if (!apiKey) {
-    sourceErrors.push('MontosVE: falta configurar MONTOSVE_API_KEY.');
-    console.warn('[bcv][source:montosve] Falta configurar MONTOSVE_API_KEY.');
-  } else {
-    try {
-      const rate = await fetchMontosveRate(apiKey);
-      const persisted = await persistBcvRate(rate);
-      if (!persisted.exchangeRateUpdated) {
-        throw new Error(
-          `No se pudo persistir la tasa nueva en exchange_rates: ${persisted.warnings.join(' ')}`
-        );
-      }
-      return {
-        success: true as const,
-        rate,
-        bcv_rate: rate,
-        source: 'montosve',
-        updatedAt: new Date().toISOString(),
-        stale: false,
-        persisted: true,
-        ...(persisted.warnings.length > 0 ? { warning: persisted.warnings.join(' ') } : {}),
-      };
-    } catch (error) {
-      const message = errorMessage(error);
-      sourceErrors.push(`MontosVE: ${message}`);
-      console.warn(`[bcv][source:montosve] No se pudo obtener/guardar la tasa: ${message}`);
+  try {
+    const rate = await fetchMontosveRate(process.env.MONTOSVE_API_KEY || '');
+    const persisted = await persistBcvRate(rate);
+    if (!persisted.exchangeRateUpdated) {
+      throw new Error(
+        `No se pudo persistir la tasa nueva en exchange_rates: ${persisted.warnings.join(' ')}`
+      );
     }
+    return {
+      success: true as const,
+      rate,
+      bcv_rate: rate,
+      source: 'montosve.com',
+      updatedAt: new Date().toISOString(),
+      stale: false,
+      persisted: true,
+      ...(persisted.warnings.length > 0 ? { warning: persisted.warnings.join(' ') } : {}),
+    };
+  } catch (error) {
+    const message = errorMessage(error);
+    sourceErrors.push(`MontosVE: ${message}`);
+    console.error('Error fetching MontosVE:', error);
   }
 
   try {
@@ -177,20 +170,11 @@ async function fetchMontosveRate(apiKey: string) {
       },
       signal: controller.signal,
     });
-    const rawResponse = await response.text();
-    console.log('MontosVE raw response:', rawResponse);
-
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
     }
 
-    let payload: unknown;
-    try {
-      payload = JSON.parse(rawResponse);
-    } catch (error) {
-      throw new Error(`La respuesta no es JSON válido: ${errorMessage(error)}`);
-    }
-
+    const payload: unknown = await response.json();
     const rate = extractMontosveBcvRate(payload);
     if (rate === null) {
       throw new Error('La respuesta JSON no contiene una tasa BCV/USD válida.');
@@ -205,118 +189,29 @@ function extractMontosveBcvRate(payload: unknown): number | null {
   const root = asRecord(payload);
   if (root?.success === false || root?.ok === false) return null;
 
-  const data = root?.data;
-  const dataItems = Array.isArray(data) ? data : null;
-  const candidateRecords = dataItems ?? (Array.isArray(payload) ? payload : []);
-  for (const candidate of candidateRecords) {
-    const record = asRecord(candidate);
-    if (!record) continue;
-    const code = [record.code, record.currency, record.symbol, record.name]
-      .filter((value): value is string => typeof value === 'string')
-      .join(' ')
-      .toUpperCase();
-    if (/\bBCV\b/.test(code) || /\bUSD\b/.test(code)) {
-      const rate = extractRate(record, ['promedio', 'price', 'rate', 'value', 'valor', 'venta', 'tasa']);
-      if (rate !== null) return rate;
-    }
+  const ratesList = root?.data || root?.rates || payload;
+  let bcvValue: unknown;
+
+  if (Array.isArray(ratesList)) {
+    const found = ratesList.find((item) => {
+      const record = asRecord(item);
+      if (!record) return false;
+      return record.code === 'BCV'
+        || record.code === 'USD'
+        || record.symbol === 'USD';
+    });
+    const record = asRecord(found);
+    bcvValue = record?.rate || record?.price || record?.amount;
+  } else {
+    const rates = asRecord(ratesList);
+    bcvValue = rates?.BCV || rates?.bcv || rates?.USD || rates?.usd;
   }
 
-  const rates = asRecord(root?.rates);
-  const directCandidates = [
-    root?.bcv,
-    rates?.bcv,
-    rates?.USD,
-    root?.rate,
-  ];
-  for (const candidate of directCandidates) {
-    const directRate = toValidRate(candidate);
-    if (directRate !== null) return directRate;
-    const nestedRate = extractRate(candidate, ['promedio', 'price', 'rate', 'value', 'valor', 'venta', 'tasa']);
-    if (nestedRate !== null) return nestedRate;
-  }
-
-  const prioritizedKeys = ['bcv', 'oficial', 'official', 'usd_ves_bcv', 'usd_bcv', 'bcv_usd'];
-  for (const key of prioritizedKeys) {
-    for (const candidate of findValuesByKey(payload, key)) {
-      const directRate = toValidRate(candidate);
-      if (directRate !== null) return directRate;
-      const rate = extractRate(candidate, ['promedio', 'price', 'rate', 'value', 'valor', 'venta', 'tasa', 'usd']);
-      if (rate !== null) return rate;
-    }
-  }
-
-  return findUsdBcvRate(payload);
-}
-
-function findValuesByKey(value: unknown, targetKey: string): unknown[] {
-  if (Array.isArray(value)) {
-    return value.flatMap((item) => findValuesByKey(item, targetKey));
-  }
-  const record = asRecord(value);
-  if (!record) return [];
-
-  const candidates: unknown[] = [];
-  for (const [key, nestedValue] of Object.entries(record)) {
-    if (key.toLowerCase() === targetKey) candidates.push(nestedValue);
-  }
-  for (const nestedValue of Object.values(record)) {
-    candidates.push(...findValuesByKey(nestedValue, targetKey));
-  }
-  return candidates;
-}
-
-function findUsdBcvRate(value: unknown): number | null {
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const rate = findUsdBcvRate(item);
-      if (rate !== null) return rate;
-    }
-    return null;
-  }
-
-  const record = asRecord(value);
-  if (!record) return null;
-  const labels = ['currency', 'code', 'symbol', 'market', 'source', 'name', 'type']
-    .map((key) => record[key])
-    .filter((entry): entry is string => typeof entry === 'string')
-    .join(' ')
-    .toLowerCase();
-  if (/(usd|dolar|dólar|bcv|oficial|official)/i.test(labels)) {
-    const rate = extractRate(record, ['promedio', 'price', 'rate', 'value', 'valor', 'venta', 'tasa', 'usd']);
-    if (rate !== null) return rate;
-  }
-
-  for (const nestedValue of Object.values(record)) {
-    const rate = findUsdBcvRate(nestedValue);
-    if (rate !== null) return rate;
-  }
-  return null;
-}
-
-function extractRate(value: unknown, rateKeys: readonly string[]): number | null {
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const rate = extractRate(item, rateKeys);
-      if (rate !== null) return rate;
-    }
-    return null;
-  }
-
-  if (typeof value !== 'object' || value === null) return null;
-  const record = asRecord(value);
-  if (!record) return null;
-
-  for (const key of rateKeys) {
-    if (key in record) {
-      const rate = toValidRate(record[key]);
-      if (rate !== null) return rate;
-    }
-  }
-  for (const nestedValue of Object.values(record)) {
-    const rate = extractRate(nestedValue, rateKeys);
-    if (rate !== null) return rate;
-  }
-  return null;
+  const valueRecord = asRecord(bcvValue);
+  const parsedRate = Number.parseFloat(String(
+    valueRecord?.rate || valueRecord?.price || valueRecord?.amount || bcvValue || ''
+  ));
+  return Number.isFinite(parsedRate) && parsedRate > 0 ? parsedRate : null;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
