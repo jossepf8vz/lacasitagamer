@@ -170,11 +170,20 @@ async function fetchMontosveRate(apiKey: string) {
       },
       signal: controller.signal,
     });
+    const rawText = await response.text();
+    console.log('MontosVE Raw Response:', rawText);
+
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
     }
 
-    const payload: unknown = await response.json();
+    let payload: unknown;
+    try {
+      payload = JSON.parse(rawText);
+    } catch (error) {
+      throw new Error(`La respuesta no es JSON válido: ${errorMessage(error)}`);
+    }
+
     const rate = extractMontosveBcvRate(payload);
     if (rate === null) {
       throw new Error('La respuesta JSON no contiene una tasa BCV/USD válida.');
@@ -189,34 +198,35 @@ function extractMontosveBcvRate(payload: unknown): number | null {
   const root = asRecord(payload);
   if (root?.success === false || root?.ok === false) return null;
 
-  let rateValue: unknown = null;
+  let bcvObject: unknown;
   const bcv = asRecord(root?.bcv);
-  const rates = asRecord(root?.rates);
+  const tasas = asRecord(root?.tasas);
 
   if (bcv?.usd) {
-    rateValue = bcv.usd;
-  } else if (rates?.bcv) {
-    rateValue = rates.bcv;
+    bcvObject = bcv.usd;
+  } else if (asRecord(root?.rates)?.bcv) {
+    bcvObject = asRecord(root?.rates)?.bcv;
   } else if (root?.bcv) {
-    rateValue = typeof root.bcv === 'object'
-      ? bcv?.price || bcv?.rate || bcv?.amount
-      : root.bcv;
+    bcvObject = root.bcv;
+  } else if (tasas?.bcv) {
+    bcvObject = tasas.bcv;
+  } else if (root?.dolar) {
+    bcvObject = root.dolar;
   } else if (Array.isArray(root?.data)) {
-    const bcvItem = root.data.find((item) => {
+    bcvObject = root.data.find((item) => {
       const record = asRecord(item);
-      return record?.code?.toString().toUpperCase() === 'BCV'
-        || record?.symbol === 'USD';
+      return record?.codigo?.toString().toUpperCase() === 'BCV'
+        || record?.title?.toString().toUpperCase() === 'BCV';
     });
-    const record = asRecord(bcvItem);
-    rateValue = record?.rate || record?.price || record?.value;
   } else if (root?.usd) {
-    rateValue = root.usd;
+    bcvObject = root.usd;
   }
 
-  const valueRecord = asRecord(rateValue);
+  const valueRecord = asRecord(bcvObject);
   const parsedRate = Number.parseFloat(String(
-    valueRecord?.price || valueRecord?.rate || valueRecord?.amount || rateValue || ''
-  ));
+    valueRecord?.monto || valueRecord?.precio || valueRecord?.valor
+      || valueRecord?.rate || valueRecord?.price || valueRecord?.amount || bcvObject || ''
+  ).trim().replace(',', '.'));
   return Number.isFinite(parsedRate) && parsedRate > 0 ? parsedRate : null;
 }
 

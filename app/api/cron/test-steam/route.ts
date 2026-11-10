@@ -84,6 +84,7 @@ export async function GET(request: Request) {
       product_id: PRODUCT_ID,
       applied_margin_percent: PROFIT_MARGIN_PERCENT,
     };
+    let hasPricingRow = false;
     let shouldPersistSupplierFallback = false;
     try {
       supabase = getSupabaseServerClient();
@@ -102,16 +103,10 @@ export async function GET(request: Request) {
           .maybeSingle();
 
         if (pricingError) throw pricingError;
-        if (!pricing || pricing.product_id !== PRODUCT_ID) {
-          throw new Error(
-            !pricing
-              ? `No existe la configuración de la variante Steam ${VARIANT_ID}.`
-              : `La variante ${VARIANT_ID} está asociada a ${pricing.product_id}, no a ${PRODUCT_ID}.`
-          );
+        if (pricing?.product_id === PRODUCT_ID) {
+          hasPricingRow = true;
         }
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'No se pudo leer la configuración del producto.';
-        warnings.push(`Se usará la configuración predeterminada de Steam: ${message}`);
         console.error('[cron/test-steam][product-config] Falló la consulta de product_pricing:', error);
       }
 
@@ -249,22 +244,24 @@ export async function GET(request: Request) {
         if (!supabase) {
           warnings.push('Supabase no está disponible; no se pudo persistir el precio calculado.');
         } else {
-          const { error: saveError } = await supabase
+          const priceFields = {
+            final_price_usd: finalPriceUsd,
+            final_price_bs: finalPriceBs,
+            bcv_rate: bcvRate,
+            updated_at: checkedAt,
+          };
+          const { error: saveError } = hasPricingRow
+            ? await supabase
+              .from('product_pricing')
+              .update(priceFields)
+              .eq('variant_id', VARIANT_ID)
+            : await supabase
             .from('product_pricing')
             .upsert({
-              variant_id: pricingConfig.variant_id,
-              product_id: pricingConfig.product_id,
+              variant_id: VARIANT_ID,
+              product_id: PRODUCT_ID,
               profit_margin_percent: PROFIT_MARGIN_PERCENT,
-              applied_margin_percent: profitMarginPercent,
-              current_supplier: best.supplier,
-              current_seller_name: best.seller_name,
-              current_offer_url: best.offer_url,
-              current_cost_usd: best.price_usd,
-              final_price_usd: finalPriceUsd,
-              final_price_bs: finalPriceBs,
-              bcv_rate: bcvRate,
-              price_checked_at: checkedAt,
-              updated_at: checkedAt,
+              ...priceFields,
             }, { onConflict: 'variant_id' });
           if (saveError) throw saveError;
         }
