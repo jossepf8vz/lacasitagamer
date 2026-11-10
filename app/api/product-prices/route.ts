@@ -22,6 +22,18 @@ type PriceCheckRow = {
   checked_at: string;
 };
 
+function getErrorDetails(error: unknown): Record<string, unknown> {
+  if (typeof error !== 'object' || error === null) {
+    return { message: error instanceof Error ? error.message : String(error) };
+  }
+
+  const details: Record<string, unknown> = {};
+  for (const key of ['message', 'code', 'details', 'hint']) {
+    if (key in error) details[key] = (error as Record<string, unknown>)[key];
+  }
+  return details;
+}
+
 export async function GET(request: Request) {
   const query = new URL(request.url).searchParams.get('variants');
   const variantIds = Array.from(new Set((query ?? '').split(',').filter(Boolean)));
@@ -31,24 +43,51 @@ export async function GET(request: Request) {
 
   try {
     const supabase = getSupabaseServerClient();
-    const [{ data: pricingRows, error: pricingError }, { data: checks, error: checksError }] = await Promise.all([
-      supabase
+    let pricingRows: PricingRow[];
+    try {
+      const { data, error } = await supabase
         .from('product_pricing')
         .select('variant_id, profit_margin_percent, fallback_cost_usd, final_price_usd, final_price_bs, applied_margin_percent')
-        .in('variant_id', variantIds),
-      supabase
+        .in('variant_id', variantIds);
+
+      if (error) throw error;
+      pricingRows = (data ?? []) as PricingRow[];
+    } catch (error) {
+      console.error('[api/product-prices][product_pricing] Falló la consulta principal.', {
+        table: 'product_pricing',
+        columns: ['variant_id', 'profit_margin_percent', 'fallback_cost_usd', 'final_price_usd', 'final_price_bs', 'applied_margin_percent'],
+        filter: { variant_id: variantIds },
+        error: getErrorDetails(error),
+      });
+      return NextResponse.json({ error: 'No se pudieron cargar los precios configurados.' }, { status: 500 });
+    }
+
+    let checks: PriceCheckRow[] = [];
+    let checksUnavailable = false;
+    const warnings: string[] = [];
+    try {
+      const { data, error } = await supabase
         .from('supplier_price_checks')
         .select('variant_id, supplier, price_usd, checked_at')
         .in('variant_id', variantIds)
         .not('price_usd', 'is', null)
-        .order('checked_at', { ascending: false }),
-    ]);
+        .order('checked_at', { ascending: false });
 
-    if (pricingError) throw pricingError;
-    if (checksError) throw checksError;
+      if (error) throw error;
+      checks = (data ?? []) as PriceCheckRow[];
+    } catch (error) {
+      checksUnavailable = true;
+      warnings.push('No se pudieron cargar las ofertas de proveedores; se muestran los precios guardados disponibles.');
+      console.error('[api/product-prices][supplier_price_checks] Falló la consulta secundaria; se continuará con product_pricing.', {
+        table: 'supplier_price_checks',
+        columns: ['variant_id', 'supplier', 'price_usd', 'checked_at'],
+        filter: { variant_id: variantIds },
+        error: getErrorDetails(error),
+      });
+    }
 
     const latestBySupplier = new Map<string, number>();
-    for (const check of checks as PriceCheckRow[]) {
+    for (const check of checks) {
       const key = `${check.variant_id}:${check.supplier}`;
       if (!latestBySupplier.has(key) && check.price_usd !== null) {
         latestBySupplier.set(key, Number(check.price_usd));
@@ -65,14 +104,17 @@ export async function GET(request: Request) {
 
     const configuredPrices: Record<string, { final_usd: number; final_bs: number }> = {};
     let bcvRate: number | null = null;
-    const configuredRows = pricingRows as PricingRow[];
+    const configuredRows = pricingRows;
     for (const pricing of configuredRows) {
       if (
-        pricing.variant_id === 'v-s10-glo'
+        (pricing.variant_id === 'v-s10-glo' || checksUnavailable)
         && pricing.final_price_usd !== null
         && pricing.final_price_bs !== null
-        && pricing.applied_margin_percent !== null
-        && Number(pricing.applied_margin_percent) === Number(pricing.profit_margin_percent)
+        && (
+          checksUnavailable
+          || pricing.applied_margin_percent !== null
+            && Number(pricing.applied_margin_percent) === Number(pricing.profit_margin_percent)
+        )
       ) {
         configuredPrices[pricing.variant_id] = {
           final_usd: Number(pricing.final_price_usd),
@@ -91,20 +133,34 @@ export async function GET(request: Request) {
     }).filter((record): record is { variantId: string; finalUsd: number } => record !== null);
 
     if (priceRecords.length > 0) {
-      const rateResult = await refreshBcvRate();
-      bcvRate = rateResult.rate;
+      try {
+        const rateResult = await refreshBcvRate();
+        bcvRate = rateResult.rate;
+      } catch (error) {
+        warnings.push('No se pudo actualizar la tasa BCV; se omiten los precios que requieren un cálculo nuevo.');
+        console.error('[api/product-prices][bcv] Falló la actualización de la tasa para calcular precios.', {
+          error: getErrorDetails(error),
+        });
+      }
     }
 
-    for (const price of priceRecords) {
-      configuredPrices[price.variantId] = {
-        final_usd: Number(price.finalUsd.toFixed(2)),
-        final_bs: Math.ceil(price.finalUsd * bcvRate!),
-      };
+    if (bcvRate !== null) {
+      for (const price of priceRecords) {
+        configuredPrices[price.variantId] = {
+          final_usd: Number(price.finalUsd.toFixed(2)),
+          final_bs: Math.ceil(price.finalUsd * bcvRate),
+        };
+      }
     }
 
-    return NextResponse.json({ prices: configuredPrices }, { headers: { 'Cache-Control': 'no-store' } });
+    return NextResponse.json(
+      { prices: configuredPrices, ...(warnings.length > 0 ? { warnings } : {}) },
+      { headers: { 'Cache-Control': 'no-store' } }
+    );
   } catch (error) {
-    console.error('Error al cargar precios finales:', error);
+    console.error('[api/product-prices] Error inesperado al cargar precios finales.', {
+      error: getErrorDetails(error),
+    });
     return NextResponse.json({ error: 'No se pudieron cargar los precios configurados.' }, { status: 500 });
   }
 }
