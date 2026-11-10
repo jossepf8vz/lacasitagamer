@@ -198,35 +198,9 @@ function extractMontosveBcvRate(payload: unknown): number | null {
   const root = asRecord(payload);
   if (root?.success === false || root?.ok === false) return null;
 
-  let bcvObject: unknown;
-  const bcv = asRecord(root?.bcv);
-  const tasas = asRecord(root?.tasas);
-
-  if (bcv?.usd) {
-    bcvObject = bcv.usd;
-  } else if (asRecord(root?.rates)?.bcv) {
-    bcvObject = asRecord(root?.rates)?.bcv;
-  } else if (root?.bcv) {
-    bcvObject = root.bcv;
-  } else if (tasas?.bcv) {
-    bcvObject = tasas.bcv;
-  } else if (root?.dolar) {
-    bcvObject = root.dolar;
-  } else if (Array.isArray(root?.data)) {
-    bcvObject = root.data.find((item) => {
-      const record = asRecord(item);
-      return record?.codigo?.toString().toUpperCase() === 'BCV'
-        || record?.title?.toString().toUpperCase() === 'BCV';
-    });
-  } else if (root?.usd) {
-    bcvObject = root.usd;
-  }
-
-  const valueRecord = asRecord(bcvObject);
-  const parsedRate = Number.parseFloat(String(
-    valueRecord?.monto || valueRecord?.precio || valueRecord?.valor
-      || valueRecord?.rate || valueRecord?.price || valueRecord?.amount || bcvObject || ''
-  ).trim().replace(',', '.'));
+  const current = asRecord(root?.current);
+  const rawUsdRate = current?.usd;
+  const parsedRate = Number.parseFloat(String(rawUsdRate ?? '').trim().replace(',', '.'));
   return Number.isFinite(parsedRate) && parsedRate > 0 ? parsedRate : null;
 }
 
