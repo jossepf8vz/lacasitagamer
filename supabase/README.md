@@ -17,5 +17,12 @@ Las URLs solo se consultan en HTTPS y los hosts están limitados a `g2a.com`, `e
 ## Tasa BCV y prueba de Steam
 
 - `/api/bcv-rate` consulta la tasa oficial, la guarda en `exchange_rates` con el origen `bcv_official_ves` y la devuelve a la PWA para mostrarla en el banner.
-- `/api/cron/test-steam` actualiza la tasa BCV, consulta los proveedores configurados para `v-s10-glo` (Steam Gift Card $10) y guarda los resultados en `supplier_price_checks`. Requiere `Authorization: Bearer <CRON_SECRET>`; solo declara éxito si al menos un proveedor devuelve un precio válido.
+- `/api/cron/test-steam` actualiza la tasa BCV, consulta los proveedores configurados para `v-s10-glo` (Steam Gift Card $10) y guarda los resultados en `supplier_price_checks`. Requiere `Authorization: Bearer <CRON_SECRET>`; solo declara éxito si Eneba y G2A devuelven ofertas válidas y se guarda el precio calculado.
 - Binance P2P permanece privado; la tasa BCV se expone únicamente a través de la API pública utilizada por el banner.
+
+## Ofertas de Steam Eneba/G2A
+
+1. Ejecuta `migrations/20261110140000_steam_offer_pricing.sql` para guardar vendedor y enlace directo por oferta, el precio ganador, el margen aplicado y el total en Bs. También fija las URLs públicas de Eneba y G2A para `v-s10-glo`.
+2. Programa cron-job.org para llamar `GET /api/cron/test-steam` con `Authorization: Bearer <CRON_SECRET>`. El endpoint responde JSON con HTTP 200 y detalla fallos de proveedor/BCV en el cuerpo.
+3. El parser solo acepta ofertas no patrocinadas que estén presentes en estado JSON público y cuya moneda USD se pueda verificar. No simula un navegador ni sortea desafíos; si la página no expone ofertas parseables, informa proveedor no disponible y no actualiza el precio ganador.
+4. El porcentaje de ganancia se toma de `product_pricing.profit_margin_percent`. La tienda lee el snapshot final y en Bs. guardado por el cron; el panel muestra el vendedor y enlace disponibles al actualizar la comparación.

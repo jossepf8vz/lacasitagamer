@@ -597,10 +597,13 @@ type SupplierComparisonResult = {
   comparisons: Array<{
     supplier: string;
     url: string;
+    seller_name: string | null;
+    offer_url: string | null;
     price_usd: number | null;
     error: string | null;
   }>;
   cheapest_supplier: string | null;
+  cheapest_seller_name: string | null;
   cheapest_url: string | null;
   cheapest_base_usd: number | null;
   profit_margin_percent: number;
@@ -613,6 +616,8 @@ type SupplierComparisonResult = {
 type SaleSupplierPrice = {
   supplier: string;
   url?: string;
+  offer_url?: string | null;
+  seller_name?: string | null;
   price_usd: number | null;
 };
 
@@ -1586,7 +1591,7 @@ export default function App() {
                                 return (
                                   <a
                                     key={supplier.id}
-                                    href={comparison?.url ?? getSupplierSearchUrl(supplier.id, item.name)}
+                                    href={comparison?.offer_url ?? comparison?.url ?? getSupplierSearchUrl(supplier.id, item.name)}
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     className="flex min-w-32 items-center justify-between gap-3 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-left transition hover:border-purple-500/60 hover:bg-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-400"
@@ -1594,6 +1599,9 @@ export default function App() {
                                   >
                                     <span>
                                       <span className="block text-[10px] font-bold text-slate-200">{supplier.name}</span>
+                                      {comparison?.seller_name && (
+                                        <span className="block text-[9px] text-slate-400">{comparison.seller_name}</span>
+                                      )}
                                       <span className={`block text-[10px] font-mono ${comparison?.price_usd ? 'text-cyan-300' : 'text-slate-500'}`}>
                                         {comparison?.price_usd ? `$${comparison.price_usd.toFixed(2)} USD` : 'No disponible'}
                                       </span>
@@ -1730,7 +1738,10 @@ export default function App() {
                             className={`rounded-xl border p-3 ${isCheapest ? 'border-emerald-400/60 bg-emerald-950/20' : 'border-slate-800 bg-slate-900/70'}`}
                           >
                             <div className="flex items-center justify-between gap-2">
-                              <h3 className="font-bold uppercase text-white">{comparison.supplier}</h3>
+                              <h3 className="font-bold uppercase text-white">
+                                {comparison.supplier}
+                                {comparison.seller_name ? ` — ${comparison.seller_name}` : ''}
+                              </h3>
                               {isCheapest && (
                                 <span className="rounded bg-emerald-500/20 px-2 py-0.5 text-[10px] font-bold text-emerald-300">
                                   MÁS BARATO
@@ -1742,7 +1753,7 @@ export default function App() {
                             </p>
                             {comparison.error && <p className="mt-1 text-xs text-amber-300">{comparison.error}</p>}
                             <a
-                              href={comparison.url}
+                              href={comparison.offer_url ?? comparison.url}
                               target="_blank"
                               rel="noopener noreferrer"
                               className="mt-3 inline-block text-xs text-purple-300 underline decoration-purple-500/50 underline-offset-2 hover:text-white"
@@ -1762,7 +1773,10 @@ export default function App() {
                         className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 px-4 py-2 text-sm font-bold text-white transition hover:from-emerald-500 hover:to-teal-500"
                       >
                         <ArrowUpRight className="h-4 w-4" />
-                        Comprar al proveedor más barato ({supplierComparison.cheapest_supplier})
+                        Comprar al proveedor más barato (
+                        {supplierComparison.cheapest_supplier}
+                        {supplierComparison.cheapest_seller_name ? ` — ${supplierComparison.cheapest_seller_name}` : ''}
+                        )
                       </a>
                     )}
                   </div>

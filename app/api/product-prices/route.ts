@@ -7,6 +7,9 @@ type PricingRow = {
   variant_id: string;
   profit_margin_percent: number;
   fallback_cost_usd: number | null;
+  final_price_usd: number | null;
+  final_price_bs: number | null;
+  applied_margin_percent: number | null;
 };
 
 type PriceCheckRow = {
@@ -28,7 +31,7 @@ export async function GET(request: Request) {
     const [{ data: pricingRows, error: pricingError }, { data: checks, error: checksError }] = await Promise.all([
       supabase
         .from('product_pricing')
-        .select('variant_id, profit_margin_percent, fallback_cost_usd')
+        .select('variant_id, profit_margin_percent, fallback_cost_usd, final_price_usd, final_price_bs, applied_margin_percent')
         .in('variant_id', variantIds),
       supabase
         .from('supplier_price_checks')
@@ -52,15 +55,35 @@ export async function GET(request: Request) {
     const cheapestByVariant = new Map<string, number>();
     latestBySupplier.forEach((price, key) => {
       const variantId = key.slice(0, key.lastIndexOf(':'));
+      const supplier = key.slice(key.lastIndexOf(':') + 1);
+      if (variantId === 'v-s10-glo' && supplier !== 'eneba' && supplier !== 'g2a') return;
       cheapestByVariant.set(variantId, Math.min(cheapestByVariant.get(variantId) ?? Infinity, price));
     });
 
     const configuredPrices: Record<string, { final_usd: number; final_bs: number }> = {};
     let bcvRate: number | null = null;
     const configuredRows = pricingRows as PricingRow[];
+    for (const pricing of configuredRows) {
+      if (
+        pricing.variant_id === 'v-s10-glo'
+        && pricing.final_price_usd !== null
+        && pricing.final_price_bs !== null
+        && pricing.applied_margin_percent !== null
+        && Number(pricing.applied_margin_percent) === Number(pricing.profit_margin_percent)
+      ) {
+        configuredPrices[pricing.variant_id] = {
+          final_usd: Number(pricing.final_price_usd),
+          final_bs: Number(pricing.final_price_bs),
+        };
+      }
+    }
+
     const priceRecords = configuredRows.map((pricing) => {
-      const supplierCost = cheapestByVariant.get(pricing.variant_id) ?? Number(pricing.fallback_cost_usd);
-      if (!Number.isFinite(supplierCost) || supplierCost <= 0) return null;
+      if (configuredPrices[pricing.variant_id]) return null;
+      const supplierCost = pricing.variant_id === 'v-s10-glo'
+        ? cheapestByVariant.get(pricing.variant_id)
+        : cheapestByVariant.get(pricing.variant_id) ?? Number(pricing.fallback_cost_usd);
+      if (supplierCost === undefined || !Number.isFinite(supplierCost) || supplierCost <= 0) return null;
       const finalUsd = Number((supplierCost * (1 + Number(pricing.profit_margin_percent) / 100)).toFixed(2));
       return { variantId: pricing.variant_id, finalUsd };
     }).filter((record): record is { variantId: string; finalUsd: number } => record !== null);
