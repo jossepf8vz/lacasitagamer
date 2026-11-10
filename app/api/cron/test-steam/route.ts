@@ -10,6 +10,7 @@ export const maxDuration = 30;
 const VARIANT_ID = 'v-s10-glo';
 const PRODUCT_ID = 'g-steam-10';
 const PRODUCT_NAME = 'Steam Gift Card $10';
+const PROFIT_MARGIN_PERCENT = 33;
 const FALLBACK_SUPPLIERS: SupplierRow[] = [
   {
     supplier: 'eneba',
@@ -28,7 +29,6 @@ type SupplierRow = {
 
 type PricingRow = {
   product_id: string;
-  profit_margin_percent: number;
 };
 
 const PROVIDER_NAMES: Record<SupplierName, string> = {
@@ -91,7 +91,7 @@ export async function GET(request: Request) {
       try {
         const { data: pricing, error: pricingError } = await supabase
           .from('product_pricing')
-          .select('variant_id, product_id, profit_margin_percent')
+          .select('variant_id, product_id')
           .eq('variant_id', VARIANT_ID)
           .maybeSingle();
 
@@ -235,8 +235,8 @@ export async function GET(request: Request) {
 
     if (best && bcvRate !== null && supabase && pricingConfig) {
       try {
-        profitMarginPercent = Number(pricingConfig.profit_margin_percent);
-        finalPriceUsd = Number((best.price_usd! * (1 + profitMarginPercent / 100)).toFixed(2));
+        profitMarginPercent = PROFIT_MARGIN_PERCENT;
+        finalPriceUsd = Number((best.price_usd! * 1.33).toFixed(2));
         finalPriceBs = Math.ceil(finalPriceUsd * bcvRate);
         const { error: updateError } = await supabase
           .from('product_pricing')

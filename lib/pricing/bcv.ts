@@ -1,23 +1,6 @@
 import { getSupabaseServerClient } from '../supabase/server';
 
-const BCV_SOURCES = [
-  {
-    name: 've.dolarapi.com',
-    url: 'https://ve.dolarapi.com/v1/dolares/oficial',
-    rateKeys: ['promedio'],
-  },
-  {
-    name: 'pydolarve.org',
-    url: 'https://pydolarve.org/api/v1/dollar?page=bcv',
-    rateKeys: ['promedio', 'price'],
-  },
-  {
-    name: 'bcv.org.ve',
-    url: 'https://www.bcv.org.ve',
-    rateKeys: [],
-    html: true,
-  },
-] as const;
+const MONTOSVE_RATES_URL = 'https://api.montosve.com/v1/fx/rates';
 const BCV_RATE_SOURCE = 'bcv_official_ves';
 const SOURCE_TIMEOUT_MS = 6000;
 const STEAM_VARIANT_ID = 'v-s10-glo';
@@ -41,49 +24,49 @@ type PersistResult = {
 
 export async function refreshBcvRate() {
   const sourceErrors: string[] = [];
+  const apiKey = process.env.MONTOSVE_API_KEY;
 
-  for (const source of BCV_SOURCES) {
+  if (!apiKey) {
+    sourceErrors.push('MontosVE: falta configurar MONTOSVE_API_KEY.');
+    console.warn('[bcv][source:montosve] Falta configurar MONTOSVE_API_KEY.');
+  } else {
     try {
-      const rate = await fetchRate(source.url, source.rateKeys, 'html' in source && source.html);
+      const rate = await fetchMontosveRate(apiKey);
       const persisted = await persistBcvRate(rate);
+      if (!persisted.exchangeRateUpdated || persisted.productPricingUpdated === 0 || persisted.warnings.length > 0) {
+        throw new Error(
+          `No se pudo persistir la tasa nueva en ambas tablas: ${persisted.warnings.join(' ') || 'product_pricing no tiene filas configuradas.'}`
+        );
+      }
       return {
         success: true as const,
         rate,
         bcv_rate: rate,
-        source: source.name,
+        source: 'montosve',
         updatedAt: new Date().toISOString(),
         stale: false,
-        persisted: persisted.productPricingUpdated > 0,
-        ...((persisted.warnings.length > 0 || !persisted.productPricingUpdated)
-          ? {
-              warning: persisted.warnings.length > 0
-                ? persisted.warnings.join(' ')
-                : 'No se encontró configuración de producto para actualizar product_pricing.bcv_rate.',
-            }
-          : {}),
+        persisted: true,
       };
     } catch (error) {
       const message = errorMessage(error);
-      sourceErrors.push(`${source.name}: ${message}`);
-      console.warn(`[bcv][source:${source.name}] No se pudo obtener una tasa válida: ${message}`);
+      sourceErrors.push(`MontosVE: ${message}`);
+      console.warn(`[bcv][source:montosve] No se pudo obtener/guardar la tasa: ${message}`);
     }
   }
 
   try {
     const storedRate = await getStoredBcvRate();
     if (storedRate) {
-      const persisted = await persistBcvRate(storedRate.rate);
       console.warn(`[bcv][fallback:${storedRate.source}] Se usará la última tasa válida guardada.`);
       return {
         success: true as const,
         ...storedRate,
         bcv_rate: storedRate.rate,
         stale: true,
-        persisted: persisted.productPricingUpdated > 0,
+        persisted: true,
         warning: [
-          'Las fuentes externas no respondieron; se devuelve la última tasa válida de Supabase.',
+          'MontosVE no respondió; se devuelve la última tasa válida guardada en Supabase.',
           ...sourceErrors,
-          ...persisted.warnings,
         ].join(' '),
       };
     }
@@ -103,49 +86,9 @@ export async function refreshBcvRate() {
 export async function getStoredBcvRate(): Promise<StoredRate | null> {
   const supabase = getSupabaseServerClient();
   let pricingReadError: string | null = null;
-  try {
-    const { data: steamPricing, error: steamPricingError } = await supabase
-      .from('product_pricing')
-      .select('bcv_rate, updated_at')
-      .eq('variant_id', STEAM_VARIANT_ID)
-      .maybeSingle();
-
-    if (steamPricingError) throw steamPricingError;
-    const steamRate = toValidRate(steamPricing?.bcv_rate);
-    if (steamRate !== null) {
-      return {
-        rate: steamRate,
-        updatedAt: steamPricing.updated_at,
-        source: 'supabase:product_pricing:v-s10-glo',
-      };
-    }
-
-    const { data: pricingRows, error: pricingError } = await supabase
-      .from('product_pricing')
-      .select('bcv_rate, updated_at')
-      .not('bcv_rate', 'is', null)
-      .order('updated_at', { ascending: false })
-      .limit(20);
-
-    if (pricingError) throw pricingError;
-
-    for (const row of pricingRows ?? []) {
-      const rate = toValidRate(row.bcv_rate);
-      if (rate !== null) {
-        return {
-          rate,
-          updatedAt: row.updated_at,
-          source: 'supabase:product_pricing',
-        };
-      }
-    }
-  } catch (error) {
-    pricingReadError = errorMessage(error);
-    console.warn(`[bcv][stored-rate:product_pricing] No se pudo leer el respaldo: ${pricingReadError}`);
-  }
-
   let exchangeRate: { rate: number | string; updated_at: string } | null = null;
   let currencyLookupError: string | null = null;
+
   try {
     const { data, error } = await supabase
       .from('exchange_rates')
@@ -175,52 +118,71 @@ export async function getStoredBcvRate(): Promise<StoredRate | null> {
       if (error) throw error;
       exchangeRate = data;
     } catch (error) {
-      const sourceLookupError = errorMessage(error);
-      throw new Error(
-        `No se pudo leer product_pricing (${pricingReadError ?? 'sin tasa válida'}), exchange_rates.currency (${currencyLookupError ?? 'sin tasa válida'}) ni exchange_rates.source (${sourceLookupError}).`
-      );
+      currencyLookupError = [
+        currencyLookupError,
+        `source: ${errorMessage(error)}`,
+      ].filter(Boolean).join('; ');
     }
   }
 
-  if (!exchangeRate) {
-    if (currencyLookupError) {
-      console.warn(`[bcv][stored-rate] No se encontró tasa BCV guardada: ${currencyLookupError}`);
+  if (exchangeRate) {
+    const rate = toValidRate(exchangeRate.rate);
+    if (rate === null) {
+      throw new Error('La tasa BCV guardada en exchange_rates no es válida.');
     }
-    return null;
+    return {
+      rate,
+      updatedAt: exchangeRate.updated_at,
+      source: 'supabase:exchange_rates',
+    };
   }
 
-  const rate = toValidRate(exchangeRate.rate);
-  if (rate === null) {
-    throw new Error('La tasa BCV guardada en Supabase no es válida.');
+  try {
+    const { data: steamPricing, error: steamPricingError } = await supabase
+      .from('product_pricing')
+      .select('bcv_rate, updated_at')
+      .eq('variant_id', STEAM_VARIANT_ID)
+      .maybeSingle();
+
+    if (steamPricingError) throw steamPricingError;
+    const steamRate = toValidRate(steamPricing?.bcv_rate);
+    if (steamRate !== null) {
+      return {
+        rate: steamRate,
+        updatedAt: steamPricing.updated_at,
+        source: 'supabase:product_pricing:v-s10-glo',
+      };
+    }
+  } catch (error) {
+    pricingReadError = errorMessage(error);
+    console.warn(`[bcv][stored-rate:product_pricing] No se pudo leer el respaldo: ${pricingReadError}`);
   }
-  return {
-    rate,
-    updatedAt: exchangeRate.updated_at,
-    source: 'supabase:exchange_rates',
-  };
+
+  throw new Error(
+    `No existe tasa válida en exchange_rates (${currencyLookupError ?? 'sin fila'}); respaldo product_pricing (${pricingReadError ?? 'sin tasa válida'}).`
+  );
 }
 
-async function fetchRate(url: string, rateKeys: readonly string[], isHtml = false) {
+async function fetchMontosveRate(apiKey: string) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), SOURCE_TIMEOUT_MS);
 
   try {
-    const response = await fetch(url, {
+    const response = await fetch(MONTOSVE_RATES_URL, {
       cache: 'no-store',
-      headers: { Accept: isHtml ? 'text/html' : 'application/json' },
+      headers: {
+        Accept: 'application/json',
+        'X-API-Key': apiKey,
+      },
       signal: controller.signal,
     });
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
     }
 
-    const rate = isHtml
-      ? extractBcvHtmlRate(await response.text())
-      : extractRate(await response.json(), rateKeys);
+    const rate = extractMontosveBcvRate(await response.json());
     if (rate === null) {
-      throw new Error(isHtml
-        ? 'El HTML del BCV no contiene una tasa válida dentro de #dolar.'
-        : 'La respuesta JSON no contiene una tasa numérica válida.');
+      throw new Error('La respuesta JSON no contiene una tasa BCV/USD válida.');
     }
     return rate;
   } finally {
@@ -228,20 +190,66 @@ async function fetchRate(url: string, rateKeys: readonly string[], isHtml = fals
   }
 }
 
-function extractBcvHtmlRate(html: string): number | null {
-  const dolarDiv = html.match(/<div\b(?=[^>]*\bid\s*=\s*["']dolar["'])[^>]*>([\s\S]*?)<\/div\s*>/i)?.[1];
-  if (!dolarDiv) return null;
+function extractMontosveBcvRate(payload: unknown): number | null {
+  const root = asRecord(payload);
+  if (!root || root.success === false || root.ok === false) return null;
 
-  const withoutActiveContent = dolarDiv
-    .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;|&#160;|&#xA0;/gi, ' ')
-    .replace(/&amp;/gi, '&')
-    .replace(/\s+/g, ' ')
-    .trim();
-  const numericText = withoutActiveContent.match(/\d+(?:[.,]\d+)?/)?.[0];
-  if (!numericText) return null;
-  return toValidRate(numericText.replace(',', '.'));
+  const prioritizedKeys = ['bcv', 'oficial', 'official', 'usd_ves_bcv', 'usd_bcv', 'bcv_usd'];
+  for (const key of prioritizedKeys) {
+    for (const candidate of findValuesByKey(payload, key)) {
+      const directRate = toValidRate(candidate);
+      if (directRate !== null) return directRate;
+      const rate = extractRate(candidate, ['promedio', 'price', 'rate', 'value', 'valor', 'venta', 'tasa', 'usd']);
+      if (rate !== null) return rate;
+    }
+  }
+
+  return findUsdBcvRate(payload);
+}
+
+function findValuesByKey(value: unknown, targetKey: string): unknown[] {
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => findValuesByKey(item, targetKey));
+  }
+  const record = asRecord(value);
+  if (!record) return [];
+
+  const candidates: unknown[] = [];
+  for (const [key, nestedValue] of Object.entries(record)) {
+    if (key.toLowerCase() === targetKey) candidates.push(nestedValue);
+  }
+  for (const nestedValue of Object.values(record)) {
+    candidates.push(...findValuesByKey(nestedValue, targetKey));
+  }
+  return candidates;
+}
+
+function findUsdBcvRate(value: unknown): number | null {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const rate = findUsdBcvRate(item);
+      if (rate !== null) return rate;
+    }
+    return null;
+  }
+
+  const record = asRecord(value);
+  if (!record) return null;
+  const labels = ['currency', 'code', 'symbol', 'market', 'source', 'name', 'type']
+    .map((key) => record[key])
+    .filter((entry): entry is string => typeof entry === 'string')
+    .join(' ')
+    .toLowerCase();
+  if (/(usd|dolar|dólar)/i.test(labels) && /(bcv|oficial|official)/i.test(labels)) {
+    const rate = extractRate(record, ['promedio', 'price', 'rate', 'value', 'valor', 'venta', 'tasa', 'usd']);
+    if (rate !== null) return rate;
+  }
+
+  for (const nestedValue of Object.values(record)) {
+    const rate = findUsdBcvRate(nestedValue);
+    if (rate !== null) return rate;
+  }
+  return null;
 }
 
 function extractRate(value: unknown, rateKeys: readonly string[]): number | null {
@@ -254,7 +262,8 @@ function extractRate(value: unknown, rateKeys: readonly string[]): number | null
   }
 
   if (typeof value !== 'object' || value === null) return null;
-  const record = value as Record<string, unknown>;
+  const record = asRecord(value);
+  if (!record) return null;
 
   for (const key of rateKeys) {
     if (key in record) {
@@ -267,6 +276,12 @@ function extractRate(value: unknown, rateKeys: readonly string[]): number | null
     if (rate !== null) return rate;
   }
   return null;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
 }
 
 function toValidRate(value: unknown) {
