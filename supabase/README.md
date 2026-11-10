@@ -18,9 +18,11 @@ Las URLs solo se consultan en HTTPS y los hosts están limitados a `g2a.com`, `e
 
 - Ejecuta `migrations/20261110182000_exchange_rates_currency.sql` para agregar `exchange_rates.currency`, vincular el registro BCV existente con `USD` y habilitar el upsert por moneda.
 - Ejecuta `migrations/20261110183000_steam_pricing_upsert_defaults.sql` para que el upsert limitado de la variante Steam complete los campos obligatorios `product_id` y `profit_margin_percent` sin enviarlos desde la ruta.
+- Ejecuta `migrations/20261110190000_supplier_price_check_history.sql` para convertir `supplier_price_checks` en un historial con un ID propio, sin unicidad por variante/proveedor.
 - `/api/bcv-rate` consulta `https://api.montosve.com/v1/tasas/actual` con la variable de servidor `MONTOSVE_API_KEY`. Guarda la tasa en `product_pricing.bcv_rate` y en `exchange_rates` (`currency = 'USD'`), recalculando `final_price_bs` cuando existe `final_price_usd`.
 - `/api/cron/test-steam` actualiza la tasa BCV, consulta los proveedores configurados para `v-s10-glo` (Steam Gift Card $10) y guarda los resultados en `supplier_price_checks`. Requiere `Authorization: Bearer <CRON_SECRET>`; solo declara éxito si Eneba y G2A devuelven ofertas válidas y se guarda el precio calculado.
 - Binance P2P permanece privado; la tasa BCV se expone únicamente a través de la API pública utilizada por el banner.
+- `/api/cron/test-steam` agrega cada consulta a `supplier_price_checks` como historial; aplica la migración indicada arriba para permitir registros repetidos por variante/proveedor.
 
 ## Ofertas de Steam Eneba/G2A
 

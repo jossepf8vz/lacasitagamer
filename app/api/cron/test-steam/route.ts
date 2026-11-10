@@ -187,7 +187,7 @@ export async function GET(request: Request) {
       try {
         const { error: saveError } = await supabase
           .from('supplier_price_checks')
-          .upsert(
+          .insert(
             results.map((result) => ({
               variant_id: result.variant_id,
               supplier: result.supplier,
@@ -197,14 +197,13 @@ export async function GET(request: Request) {
               offer_url: result.offer_url,
               error: result.error,
               checked_at: result.checked_at,
-            })),
-            { onConflict: 'variant_id,supplier' }
+            }))
           );
         if (saveError) throw saveError;
       } catch (error) {
         const message = getErrorMessage(error, 'No se pudieron guardar los precios.');
         errors.push(`Guardado de ofertas: ${message}`);
-        console.error('[cron/test-steam][offer-save] Falló el upsert de supplier_price_checks:', error);
+        console.error('[cron/test-steam][offer-save] Falló la inserción en supplier_price_checks:', error);
       }
     }
 
