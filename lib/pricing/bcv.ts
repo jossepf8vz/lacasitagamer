@@ -189,27 +189,33 @@ function extractMontosveBcvRate(payload: unknown): number | null {
   const root = asRecord(payload);
   if (root?.success === false || root?.ok === false) return null;
 
-  const ratesList = root?.data || root?.rates || payload;
-  let bcvValue: unknown;
+  let rateValue: unknown = null;
+  const bcv = asRecord(root?.bcv);
+  const rates = asRecord(root?.rates);
 
-  if (Array.isArray(ratesList)) {
-    const found = ratesList.find((item) => {
+  if (bcv?.usd) {
+    rateValue = bcv.usd;
+  } else if (rates?.bcv) {
+    rateValue = rates.bcv;
+  } else if (root?.bcv) {
+    rateValue = typeof root.bcv === 'object'
+      ? bcv?.price || bcv?.rate || bcv?.amount
+      : root.bcv;
+  } else if (Array.isArray(root?.data)) {
+    const bcvItem = root.data.find((item) => {
       const record = asRecord(item);
-      if (!record) return false;
-      return record.code === 'BCV'
-        || record.code === 'USD'
-        || record.symbol === 'USD';
+      return record?.code?.toString().toUpperCase() === 'BCV'
+        || record?.symbol === 'USD';
     });
-    const record = asRecord(found);
-    bcvValue = record?.rate || record?.price || record?.amount;
-  } else {
-    const rates = asRecord(ratesList);
-    bcvValue = rates?.BCV || rates?.bcv || rates?.USD || rates?.usd;
+    const record = asRecord(bcvItem);
+    rateValue = record?.rate || record?.price || record?.value;
+  } else if (root?.usd) {
+    rateValue = root.usd;
   }
 
-  const valueRecord = asRecord(bcvValue);
+  const valueRecord = asRecord(rateValue);
   const parsedRate = Number.parseFloat(String(
-    valueRecord?.rate || valueRecord?.price || valueRecord?.amount || bcvValue || ''
+    valueRecord?.price || valueRecord?.rate || valueRecord?.amount || rateValue || ''
   ));
   return Number.isFinite(parsedRate) && parsedRate > 0 ? parsedRate : null;
 }
