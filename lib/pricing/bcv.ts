@@ -27,11 +27,6 @@ export async function refreshBcvRate() {
   try {
     const rate = await fetchMontosveRate(process.env.MONTOSVE_API_KEY || '');
     const persisted = await persistBcvRate(rate);
-    if (!persisted.exchangeRateUpdated) {
-      throw new Error(
-        `No se pudo persistir la tasa nueva en exchange_rates: ${persisted.warnings.join(' ')}`
-      );
-    }
     return {
       success: true as const,
       rate,
@@ -39,7 +34,7 @@ export async function refreshBcvRate() {
       source: 'montosve.com',
       updatedAt: new Date().toISOString(),
       stale: false,
-      persisted: true,
+      persisted: persisted.exchangeRateUpdated,
       ...(persisted.warnings.length > 0 ? { warning: persisted.warnings.join(' ') } : {}),
     };
   } catch (error) {
