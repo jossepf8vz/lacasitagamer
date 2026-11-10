@@ -68,6 +68,7 @@ export async function GET(request: Request) {
   }
 
   let bcvRate: number | null = null;
+  let bcvRateSource: string | null = null;
   let bcvRateIsStale = false;
   const errors: string[] = [];
   const warnings: string[] = [];
@@ -154,13 +155,13 @@ export async function GET(request: Request) {
             warnings.push('warning' in result ? result.warning : 'Se usó la última tasa BCV guardada.');
             console.warn('[cron/test-steam][bcv] Se usará la tasa BCV guardada en Supabase.');
           }
-          return { rate: result.rate, stale: result.stale };
+          return { rate: result.rate, source: result.source, stale: result.stale };
         })
         .catch((error: unknown) => {
           const message = error instanceof Error ? error.message : 'No se pudo obtener una tasa BCV válida.';
           errors.push(`Tasa BCV: ${message}`);
           console.error('[cron/test-steam][bcv] No se obtuvo tasa actual ni respaldo:', error);
-          return { rate: null, stale: true };
+          return { rate: null, source: null, stale: true };
         }),
       Promise.all(suppliers.map(async (supplier): Promise<SupplierCheck> => {
         try {
@@ -192,6 +193,7 @@ export async function GET(request: Request) {
       })),
     ]);
     bcvRate = rateResult.rate;
+    bcvRateSource = rateResult.source;
     bcvRateIsStale = rateResult.stale;
 
     if (supabase && results.length > 0) {
@@ -266,6 +268,7 @@ export async function GET(request: Request) {
     return jsonResponse({
       success: errors.length === 0 && best !== null && bcvRate !== null && finalPriceBs !== null,
       bcv_rate: bcvRate,
+      source: bcvRateSource,
       bcv_rate_stale: bcvRateIsStale,
       product: PRODUCT_NAME,
       best_price_usd: best?.price_usd ?? null,
@@ -292,6 +295,7 @@ export async function GET(request: Request) {
     return jsonResponse({
       success: false,
       bcv_rate: bcvRate,
+      source: bcvRateSource,
       product: PRODUCT_NAME,
       best_price_usd: null,
       provider: null,

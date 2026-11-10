@@ -1,103 +1,279 @@
 import { getSupabaseServerClient } from '../supabase/server';
 
-const BCV_OFFICIAL_URL = 'https://ve.dolarapi.com/v1/dolares/oficial';
+const BCV_SOURCES = [
+  {
+    name: 've.dolarapi.com',
+    url: 'https://ve.dolarapi.com/v1/dolares/bcv',
+    rateKeys: ['promedio'],
+  },
+  {
+    name: 'pydolarvenezuela-api.vercel.app',
+    url: 'https://pydolarvenezuela-api.vercel.app/api/v1/dollar?page=bcv',
+    rateKeys: ['promedio', 'bcv', 'price', 'valor', 'value', 'rate', 'venta', 'tasa'],
+  },
+] as const;
 const BCV_RATE_SOURCE = 'bcv_official_ves';
+const SOURCE_TIMEOUT_MS = 6000;
 
-type BcvResponse = {
-  promedio?: unknown;
-  price?: unknown;
-  venta?: unknown;
+type PricingRow = {
+  variant_id: string;
+  final_price_usd: number | string | null;
+};
+
+type StoredRate = {
+  rate: number;
+  updatedAt: string | null;
+  source: string;
+};
+
+type PersistResult = {
+  productPricingUpdated: number;
+  exchangeRateUpdated: boolean;
+  warnings: string[];
 };
 
 export async function refreshBcvRate() {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 10000);
-  let refreshError: unknown;
+  const sourceErrors: string[] = [];
 
-  try {
-    const response = await fetch(BCV_OFFICIAL_URL, {
-      cache: 'no-store',
-      signal: controller.signal,
-    });
-    if (!response.ok) {
-      throw new Error(`La API BCV respondió con el estado ${response.status}.`);
+  for (const source of BCV_SOURCES) {
+    try {
+      const rate = await fetchRate(source.url, source.rateKeys);
+      const persisted = await persistBcvRate(rate);
+      return {
+        success: true as const,
+        rate,
+        bcv_rate: rate,
+        source: source.name,
+        updatedAt: new Date().toISOString(),
+        stale: false,
+        persisted: persisted.productPricingUpdated > 0,
+        ...((persisted.warnings.length > 0 || !persisted.productPricingUpdated)
+          ? {
+              warning: persisted.warnings.length > 0
+                ? persisted.warnings.join(' ')
+                : 'No se encontró configuración de producto para actualizar product_pricing.bcv_rate.',
+            }
+          : {}),
+      };
+    } catch (error) {
+      const message = errorMessage(error);
+      sourceErrors.push(`${source.name}: ${message}`);
+      console.warn(`[bcv][source:${source.name}] No se pudo obtener una tasa válida: ${message}`);
     }
-
-    const data: unknown = await response.json();
-    if (typeof data !== 'object' || data === null) {
-      throw new Error('La API BCV no devolvió una tasa válida.');
-    }
-
-    const record = data as BcvResponse;
-    const rawRate = record.promedio ?? record.price ?? record.venta;
-    const rate = typeof rawRate === 'number' || typeof rawRate === 'string' ? Number(rawRate) : NaN;
-    if (!Number.isFinite(rate) || rate <= 0) {
-      throw new Error('La API BCV no devolvió una tasa válida.');
-    }
-
-    const updatedAt = new Date().toISOString();
-    const supabase = getSupabaseServerClient();
-    const { data: savedRate, error } = await supabase
-      .from('exchange_rates')
-      .upsert(
-        { source: BCV_RATE_SOURCE, rate, updated_at: updatedAt },
-        { onConflict: 'source' }
-      )
-      .select('rate, updated_at')
-      .single();
-
-    if (error) throw error;
-    return {
-      success: true as const,
-      rate: Number(savedRate.rate),
-      updatedAt: savedRate.updated_at,
-      stale: false,
-    };
-  } catch (error) {
-    refreshError = error;
-  } finally {
-    clearTimeout(timeout);
   }
 
   try {
     const storedRate = await getStoredBcvRate();
     if (storedRate) {
-      console.warn('Se devuelve la última tasa BCV válida guardada en Supabase.');
+      const persisted = await persistBcvRate(storedRate.rate);
+      console.warn(`[bcv][fallback:${storedRate.source}] Se usará la última tasa válida guardada.`);
       return {
         success: true as const,
         ...storedRate,
+        bcv_rate: storedRate.rate,
         stale: true,
-        warning: 'No se pudo actualizar la tasa; se devuelve la última guardada.',
+        persisted: persisted.productPricingUpdated > 0,
+        warning: [
+          'Las fuentes externas no respondieron; se devuelve la última tasa válida de Supabase.',
+          ...sourceErrors,
+          ...persisted.warnings,
+        ].join(' '),
       };
     }
   } catch (error) {
-    console.error('No se pudo leer la tasa BCV de respaldo en Supabase:', error);
+    const message = errorMessage(error);
+    console.error('[bcv][stored-rate] Falló la lectura de la tasa de respaldo en Supabase:', error);
     throw new Error(
-      `Falló la actualización BCV (${errorMessage(refreshError)}); también falló la lectura del respaldo (${errorMessage(error)}).`
+      `Fallaron las fuentes BCV (${sourceErrors.join('; ')}) y la lectura de Supabase (${message}).`
     );
   }
 
   throw new Error(
-    `Falló la actualización BCV (${errorMessage(refreshError)}) y no existe una tasa guardada en Supabase.`
+    `Fallaron las fuentes BCV (${sourceErrors.join('; ')}) y no existe una tasa válida guardada en Supabase.`
   );
 }
 
-export async function getStoredBcvRate() {
+export async function getStoredBcvRate(): Promise<StoredRate | null> {
   const supabase = getSupabaseServerClient();
-  const { data, error } = await supabase
-    .from('exchange_rates')
-    .select('rate, updated_at')
-    .eq('source', BCV_RATE_SOURCE)
-    .maybeSingle();
+  let pricingReadError: string | null = null;
+  try {
+    const { data: pricingRows, error: pricingError } = await supabase
+      .from('product_pricing')
+      .select('bcv_rate, updated_at')
+      .not('bcv_rate', 'is', null)
+      .order('updated_at', { ascending: false });
 
-  if (error) throw error;
-  if (!data) return null;
+    if (pricingError) throw pricingError;
 
-  const rate = Number(data.rate);
-  if (!Number.isFinite(rate) || rate <= 0) {
+    for (const row of pricingRows ?? []) {
+      const rate = toValidRate(row.bcv_rate);
+      if (rate !== null) {
+        return {
+          rate,
+          updatedAt: row.updated_at,
+          source: 'supabase:product_pricing',
+        };
+      }
+    }
+  } catch (error) {
+    pricingReadError = errorMessage(error);
+    console.warn(`[bcv][stored-rate:product_pricing] No se pudo leer el respaldo: ${pricingReadError}`);
+  }
+
+  let exchangeRate: { rate: number | string; updated_at: string } | null;
+  try {
+    const { data, error: exchangeRateError } = await supabase
+      .from('exchange_rates')
+      .select('rate, updated_at')
+      .eq('source', BCV_RATE_SOURCE)
+      .maybeSingle();
+
+    if (exchangeRateError) throw exchangeRateError;
+    exchangeRate = data;
+  } catch (error) {
+    const exchangeReadError = errorMessage(error);
+    throw new Error(
+      `No se pudo leer product_pricing (${pricingReadError ?? 'sin tasa válida'}) ni exchange_rates (${exchangeReadError}).`
+    );
+  }
+  if (!exchangeRate) return null;
+
+  const rate = toValidRate(exchangeRate.rate);
+  if (rate === null) {
     throw new Error('La tasa BCV guardada en Supabase no es válida.');
   }
-  return { rate, updatedAt: data.updated_at };
+  return {
+    rate,
+    updatedAt: exchangeRate.updated_at,
+    source: 'supabase:exchange_rates',
+  };
+}
+
+async function fetchRate(url: string, rateKeys: readonly string[]) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), SOURCE_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(url, {
+      cache: 'no-store',
+      headers: { Accept: 'application/json' },
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const payload: unknown = await response.json();
+    const rate = extractRate(payload, rateKeys);
+    if (rate === null) {
+      throw new Error('La respuesta JSON no contiene una tasa numérica válida.');
+    }
+    return rate;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function extractRate(value: unknown, rateKeys: readonly string[]): number | null {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const rate = extractRate(item, rateKeys);
+      if (rate !== null) return rate;
+    }
+    return null;
+  }
+
+  if (typeof value !== 'object' || value === null) return null;
+  const record = value as Record<string, unknown>;
+
+  for (const key of rateKeys) {
+    if (key in record) {
+      const rate = toValidRate(record[key]);
+      if (rate !== null) return rate;
+    }
+  }
+  for (const nestedValue of Object.values(record)) {
+    const rate = extractRate(nestedValue, rateKeys);
+    if (rate !== null) return rate;
+  }
+  return null;
+}
+
+function toValidRate(value: unknown) {
+  const rate = typeof value === 'number'
+    ? value
+    : typeof value === 'string'
+      ? Number(value.replace(',', '.'))
+      : NaN;
+  return Number.isFinite(rate) && rate > 0 ? rate : null;
+}
+
+async function persistBcvRate(rate: number): Promise<PersistResult> {
+  const warnings: string[] = [];
+  let productPricingUpdated = 0;
+  let exchangeRateUpdated = false;
+  const updatedAt = new Date().toISOString();
+
+  let supabase: ReturnType<typeof getSupabaseServerClient>;
+  try {
+    supabase = getSupabaseServerClient();
+  } catch (error) {
+    const message = `No se pudo inicializar Supabase: ${errorMessage(error)}`;
+    console.error(`[bcv][persist] ${message}`);
+    return {
+      productPricingUpdated,
+      exchangeRateUpdated,
+      warnings: [message],
+    };
+  }
+
+  try {
+    const { data: pricingRows, error: pricingError } = await supabase
+      .from('product_pricing')
+      .select('variant_id, final_price_usd');
+    if (pricingError) throw pricingError;
+
+    for (const row of (pricingRows ?? []) as PricingRow[]) {
+      const finalPriceUsd = row.final_price_usd === null ? null : toValidRate(row.final_price_usd);
+      const updates: { bcv_rate: number; final_price_bs?: number; updated_at: string } = {
+        bcv_rate: rate,
+        updated_at: updatedAt,
+      };
+      if (finalPriceUsd !== null) {
+        updates.final_price_bs = Math.ceil(finalPriceUsd * rate);
+      }
+
+      const { error: updateError } = await supabase
+        .from('product_pricing')
+        .update(updates)
+        .eq('variant_id', row.variant_id);
+      if (updateError) {
+        throw new Error(`${row.variant_id}: ${errorMessage(updateError)}`);
+      }
+      productPricingUpdated += 1;
+    }
+  } catch (error) {
+    const message = `No se pudo actualizar product_pricing.bcv_rate/precio en Bs.: ${errorMessage(error)}`;
+    warnings.push(message);
+    console.error(`[bcv][persist:product_pricing] ${message}`);
+  }
+
+  try {
+    const { error } = await supabase
+      .from('exchange_rates')
+      .upsert(
+        { source: BCV_RATE_SOURCE, rate, updated_at: updatedAt },
+        { onConflict: 'source' }
+      );
+    if (error) throw error;
+    exchangeRateUpdated = true;
+  } catch (error) {
+    const message = `No se pudo actualizar exchange_rates: ${errorMessage(error)}`;
+    warnings.push(message);
+    console.error(`[bcv][persist:exchange_rates] ${message}`);
+  }
+
+  return { productPricingUpdated, exchangeRateUpdated, warnings };
 }
 
 function errorMessage(error: unknown) {
