@@ -90,6 +90,10 @@ function offerIsPromoted(value: unknown): boolean {
         return true;
       }
       if (normalizedKey.includes('cashback') || normalizedKey.includes('cash_back')) {
+        const cashbackAmount = typeof nested === 'string'
+          ? Number(nested.replace(/[^0-9.,-]/g, '').replace(',', '.'))
+          : Number(nested);
+        if (Number.isFinite(cashbackAmount) && cashbackAmount > 0) return true;
         if (
           nested
           && typeof nested === 'object'

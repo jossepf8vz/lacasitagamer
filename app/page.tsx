@@ -878,8 +878,13 @@ export default function App() {
 
         if (!active) return;
         setBcvRate(rate);
-        setIsBcvRateFromCache(false);
-        setBcvRateError(null);
+        const usingStoredRate = 'stale' in data && data.stale === true;
+        setIsBcvRateFromCache(usingStoredRate);
+        setBcvRateError(
+          usingStoredRate && 'error' in data && typeof data.error === 'string'
+            ? data.error
+            : null
+        );
         setIsBcvRateLoading(false);
         try {
           window.localStorage.setItem(BCV_RATE_CACHE_KEY, JSON.stringify({
@@ -1291,19 +1296,41 @@ export default function App() {
   };
 
   // Procesar Compra y Generación de Puntos Gamer Cash
-  const handleProcessOrder = (e) => {
+  const handleProcessOrder = async (e) => {
     e.preventDefault();
-    if (bcvRate === null) {
-      alert('No se puede procesar el pedido hasta obtener la tasa oficial BCV.');
-      return;
-    }
-
     if (!checkoutForm.email || !checkoutForm.phone || !checkoutForm.referenceNumber) {
       alert("Por favor completa todos los campos del reporte de pago.");
       return;
     }
 
     setIsProcessingOrder(true);
+    let checkoutBcvRate = bcvRate;
+
+    if (checkoutBcvRate === null) {
+      try {
+        const response = await fetch('/api/bcv-rate', { cache: 'no-store' });
+        const data: unknown = await response.json();
+        if (!response.ok || typeof data !== 'object' || data === null || !('rate' in data)) {
+          throw new Error('No hay una tasa BCV guardada disponible para calcular el pedido.');
+        }
+
+        const rate = typeof data.rate === 'number' || typeof data.rate === 'string' ? Number(data.rate) : NaN;
+        if (!Number.isFinite(rate) || rate <= 0) {
+          throw new Error('La tasa BCV guardada no es válida.');
+        }
+        checkoutBcvRate = rate;
+        setBcvRate(rate);
+        const usingStoredRate = 'stale' in data && data.stale === true;
+        setIsBcvRateFromCache(usingStoredRate);
+        setBcvRateError(usingStoredRate && 'error' in data && typeof data.error === 'string' ? data.error : null);
+      } catch (error) {
+        setIsProcessingOrder(false);
+        alert(error instanceof Error ? error.message : 'No se pudo obtener la tasa BCV para el pedido.');
+        return;
+      }
+    }
+
+    const orderBcvRate = checkoutBcvRate;
 
     setTimeout(() => {
       // 10 puntos por cada $1 gastado
@@ -1325,7 +1352,7 @@ export default function App() {
         paymentMethod: checkoutForm.paymentMethod,
         referenceNumber: checkoutForm.referenceNumber,
         totalUsd: finalCheckoutUsd,
-        totalBs: calculateBsNumeric(finalCheckoutUsd),
+        totalBs: Math.ceil(finalCheckoutUsd * orderBcvRate),
         status: 'Aprobado',
         items: itemsWithArbitrage,
         generatedKeys: cart.map(item => ({
@@ -1400,8 +1427,8 @@ export default function App() {
                 : `${new Intl.NumberFormat('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(bcvRate)} Bs/USD`}
             </span>
             {bcvRate !== null && isBcvRateFromCache && (
-              <span className="text-amber-300" title={bcvRateError ?? 'Usando la última tasa guardada en este dispositivo.'}>
-                (caché local)
+              <span className="text-amber-300" title={bcvRateError ?? 'Usando la última tasa guardada.'}>
+                (tasa guardada)
               </span>
             )}
             {bcvRate !== null && !isBcvRateFromCache && bcvRateError && (

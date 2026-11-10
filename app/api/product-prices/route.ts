@@ -80,9 +80,8 @@ export async function GET(request: Request) {
 
     const priceRecords = configuredRows.map((pricing) => {
       if (configuredPrices[pricing.variant_id]) return null;
-      const supplierCost = pricing.variant_id === 'v-s10-glo'
-        ? cheapestByVariant.get(pricing.variant_id)
-        : cheapestByVariant.get(pricing.variant_id) ?? Number(pricing.fallback_cost_usd);
+      if (pricing.variant_id === 'v-s10-glo') return null;
+      const supplierCost = cheapestByVariant.get(pricing.variant_id) ?? Number(pricing.fallback_cost_usd);
       if (supplierCost === undefined || !Number.isFinite(supplierCost) || supplierCost <= 0) return null;
       const finalUsd = Number((supplierCost * (1 + Number(pricing.profit_margin_percent) / 100)).toFixed(2));
       return { variantId: pricing.variant_id, finalUsd };

@@ -118,6 +118,7 @@ export async function POST(request: Request) {
         variant_id: pricing.variant_id,
         comparisons: results,
         cheapest_supplier: null,
+        cheapest_seller_name: null,
         cheapest_url: null,
         cheapest_base_usd: null,
         profit_margin_percent: Number(pricing.profit_margin_percent),

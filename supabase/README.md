@@ -22,7 +22,9 @@ Las URLs solo se consultan en HTTPS y los hosts están limitados a `g2a.com`, `e
 
 ## Ofertas de Steam Eneba/G2A
 
-1. Ejecuta `migrations/20261110140000_steam_offer_pricing.sql` para guardar vendedor y enlace directo por oferta, el precio ganador, el margen aplicado y el total en Bs. También fija las URLs públicas de Eneba y G2A para `v-s10-glo`.
+1. Ejecuta `migrations/20261110140000_steam_offer_pricing.sql` y `migrations/20261110150000_steam_margin_33.sql` para guardar vendedor y enlace directo por oferta, el precio ganador, el margen aplicado y el total en Bs. La segunda migración fija el margen de `v-s10-glo` en 33%. La primera también fija las URLs públicas de Eneba y G2A para esa variante.
 2. Programa cron-job.org para llamar `GET /api/cron/test-steam` con `Authorization: Bearer <CRON_SECRET>`. El endpoint responde JSON con HTTP 200 y detalla fallos de proveedor/BCV en el cuerpo.
 3. El parser solo acepta ofertas no patrocinadas que estén presentes en estado JSON público y cuya moneda USD se pueda verificar. No simula un navegador ni sortea desafíos; si la página no expone ofertas parseables, informa proveedor no disponible y no actualiza el precio ganador.
-4. El porcentaje de ganancia se toma de `product_pricing.profit_margin_percent`. La tienda lee el snapshot final y en Bs. guardado por el cron; el panel muestra el vendedor y enlace disponibles al actualizar la comparación.
+4. El porcentaje se toma de `product_pricing.profit_margin_percent` (33% para Steam). La tienda lee el snapshot final guardado por el cron y calcula su equivalente en Bs. con la tasa BCV; el panel muestra el vendedor y enlace disponibles al actualizar la comparación.
+
+La ruta `/api/bcv-rate` intenta actualizar `exchange_rates` desde la fuente oficial. Si la fuente externa no responde, devuelve como tasa desactualizada el último valor válido persistido. El checkout también consulta esta ruta cuando todavía no tiene una tasa en memoria; solo detiene el pedido cuando no hay ninguna tasa válida disponible.

@@ -1,6 +1,7 @@
 import { getSupabaseServerClient } from '../supabase/server';
 
 const BCV_OFFICIAL_URL = 'https://ve.dolarapi.com/v1/dolares/oficial';
+const BCV_RATE_SOURCE = 'bcv_official_ves';
 
 type BcvResponse = {
   promedio?: unknown;
@@ -37,7 +38,7 @@ export async function refreshBcvRate() {
     const { data: savedRate, error } = await supabase
       .from('exchange_rates')
       .upsert(
-        { source: 'bcv_official_ves', rate, updated_at: updatedAt },
+        { source: BCV_RATE_SOURCE, rate, updated_at: updatedAt },
         { onConflict: 'source' }
       )
       .select('rate, updated_at')
@@ -48,4 +49,22 @@ export async function refreshBcvRate() {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+export async function getStoredBcvRate() {
+  const supabase = getSupabaseServerClient();
+  const { data, error } = await supabase
+    .from('exchange_rates')
+    .select('rate, updated_at')
+    .eq('source', BCV_RATE_SOURCE)
+    .maybeSingle();
+
+  if (error) throw error;
+  if (!data) return null;
+
+  const rate = Number(data.rate);
+  if (!Number.isFinite(rate) || rate <= 0) {
+    throw new Error('La tasa BCV guardada en Supabase no es válida.');
+  }
+  return { rate, updatedAt: data.updated_at };
 }

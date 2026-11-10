@@ -5,6 +5,7 @@ import { getSupabaseServerClient } from '../../../../lib/supabase/server';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+export const maxDuration = 30;
 
 const VARIANT_ID = 'v-s10-glo';
 const PRODUCT_ID = 'g-steam-10';
@@ -60,14 +61,6 @@ export async function GET(request: Request) {
   const errors: string[] = [];
 
   try {
-    try {
-      ({ rate: bcvRate } = await refreshBcvRate());
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'No se pudo actualizar la tasa BCV.';
-      errors.push(`BCV: ${message}`);
-      console.error('Error al actualizar la tasa BCV para la prueba de Steam:', error);
-    }
-
     let supabase: ReturnType<typeof getSupabaseServerClient> | null = null;
     let suppliers: SupplierRow[] = [];
     let pricingConfig: PricingRow | null = null;
@@ -100,34 +93,45 @@ export async function GET(request: Request) {
     }
 
     const checkedAt = new Date().toISOString();
-    const results: SupplierCheck[] = await Promise.all(suppliers.map(async (supplier) => {
-      try {
-        const offer = await fetchSupplierOffer(supplier);
-        return {
-          variant_id: VARIANT_ID,
-          supplier: supplier.supplier,
-          source_url: supplier.url,
-          price_usd: offer.priceUsd,
-          seller_name: offer.sellerName,
-          offer_url: offer.offerUrl,
-          error: null,
-          checked_at: checkedAt,
-        };
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Error desconocido consultando al proveedor.';
-        console.error(`Error al consultar ${supplier.supplier} para la prueba de Steam:`, error);
-        return {
-          variant_id: VARIANT_ID,
-          supplier: supplier.supplier,
-          source_url: supplier.url,
-          price_usd: null,
-          seller_name: null,
-          offer_url: null,
-          error: message,
-          checked_at: checkedAt,
-        };
-      }
-    }));
+    const [rateResult, results] = await Promise.all([
+      refreshBcvRate()
+        .then(({ rate }) => ({ rate }))
+        .catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : 'No se pudo actualizar la tasa BCV.';
+          errors.push(`BCV: ${message}`);
+          console.error('Error al actualizar la tasa BCV para la prueba de Steam:', error);
+          return { rate: null };
+        }),
+      Promise.all(suppliers.map(async (supplier): Promise<SupplierCheck> => {
+        try {
+          const offer = await fetchSupplierOffer(supplier);
+          return {
+            variant_id: VARIANT_ID,
+            supplier: supplier.supplier,
+            source_url: supplier.url,
+            price_usd: offer.priceUsd,
+            seller_name: offer.sellerName,
+            offer_url: offer.offerUrl,
+            error: null,
+            checked_at: checkedAt,
+          };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Error desconocido consultando al proveedor.';
+          console.error(`Error al consultar ${supplier.supplier} para la prueba de Steam:`, error);
+          return {
+            variant_id: VARIANT_ID,
+            supplier: supplier.supplier,
+            source_url: supplier.url,
+            price_usd: null,
+            seller_name: null,
+            offer_url: null,
+            error: message,
+            checked_at: checkedAt,
+          };
+        }
+      })),
+    ]);
+    bcvRate = rateResult.rate;
 
     if (supabase && results.length > 0) {
       try {
