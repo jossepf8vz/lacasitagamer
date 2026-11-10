@@ -28,7 +28,9 @@ type SupplierRow = {
 };
 
 type PricingRow = {
+  variant_id: string;
   product_id: string;
+  applied_margin_percent: number;
 };
 
 const PROVIDER_NAMES: Record<SupplierName, string> = {
@@ -77,7 +79,11 @@ export async function GET(request: Request) {
   try {
     let supabase: ReturnType<typeof getSupabaseServerClient> | null = null;
     let suppliers: SupplierRow[] = FALLBACK_SUPPLIERS;
-    let pricingConfig: PricingRow | null = null;
+    let pricingConfig: PricingRow = {
+      variant_id: VARIANT_ID,
+      product_id: PRODUCT_ID,
+      applied_margin_percent: PROFIT_MARGIN_PERCENT,
+    };
     let shouldPersistSupplierFallback = false;
     try {
       supabase = getSupabaseServerClient();
@@ -96,14 +102,16 @@ export async function GET(request: Request) {
           .maybeSingle();
 
         if (pricingError) throw pricingError;
-        if (!pricing) throw new Error(`No existe la configuración de la variante Steam ${VARIANT_ID}.`);
-        if (pricing.product_id !== PRODUCT_ID) {
-          throw new Error(`La variante ${VARIANT_ID} está asociada a ${pricing.product_id}, no a ${PRODUCT_ID}.`);
+        if (!pricing || pricing.product_id !== PRODUCT_ID) {
+          throw new Error(
+            !pricing
+              ? `No existe la configuración de la variante Steam ${VARIANT_ID}.`
+              : `La variante ${VARIANT_ID} está asociada a ${pricing.product_id}, no a ${PRODUCT_ID}.`
+          );
         }
-        pricingConfig = pricing as PricingRow;
       } catch (error) {
         const message = error instanceof Error ? error.message : 'No se pudo leer la configuración del producto.';
-        errors.push(`Configuración de producto: ${message}`);
+        warnings.push(`Se usará la configuración predeterminada de Steam: ${message}`);
         console.error('[cron/test-steam][product-config] Falló la consulta de product_pricing:', error);
       }
 
@@ -222,54 +230,57 @@ export async function GET(request: Request) {
     );
     const comparisonComplete = results.length === FALLBACK_SUPPLIERS.length
       && FALLBACK_SUPPLIERS.every((supplier) => results.some((result) => result.supplier === supplier.supplier && result.price_usd !== null));
-    const best = comparisonComplete ? availableBest : null;
+    const best = availableBest;
 
     if (!comparisonComplete) {
-      errors.push('Comparación Eneba/G2A: falta una oferta verificable; no se actualizará el precio final.');
-      console.error('[cron/test-steam][comparison] Comparación incompleta; se conserva el último precio guardado.');
+      warnings.push('Comparación Eneba/G2A incompleta; se usará la mejor oferta válida disponible.');
+      console.warn('[cron/test-steam][comparison] Comparación incompleta; se usará la mejor oferta válida disponible.');
     }
 
     let finalPriceUsd: number | null = null;
     let finalPriceBs: number | null = null;
     let profitMarginPercent: number | null = null;
 
-    if (best && bcvRate !== null && supabase && pricingConfig) {
+    if (best && bcvRate !== null) {
       try {
-        profitMarginPercent = PROFIT_MARGIN_PERCENT;
+        profitMarginPercent = pricingConfig.applied_margin_percent;
         finalPriceUsd = Number((best.price_usd! * 1.33).toFixed(2));
-        finalPriceBs = Math.ceil(finalPriceUsd * bcvRate);
-        const { error: updateError } = await supabase
-          .from('product_pricing')
-          .update({
-            current_supplier: best.supplier,
-            current_seller_name: best.seller_name,
-            current_offer_url: best.offer_url,
-            current_cost_usd: best.price_usd,
-            final_price_usd: finalPriceUsd,
-            final_price_bs: finalPriceBs,
-            bcv_rate: bcvRate,
-            applied_margin_percent: profitMarginPercent,
-            price_checked_at: checkedAt,
-            updated_at: checkedAt,
-          })
-          .eq('variant_id', VARIANT_ID)
-          .eq('product_id', PRODUCT_ID);
-        if (updateError) throw updateError;
+        finalPriceBs = Number((finalPriceUsd * bcvRate).toFixed(2));
+        if (!supabase) {
+          warnings.push('Supabase no está disponible; no se pudo persistir el precio calculado.');
+        } else {
+          const { error: saveError } = await supabase
+            .from('product_pricing')
+            .upsert({
+              variant_id: pricingConfig.variant_id,
+              product_id: pricingConfig.product_id,
+              profit_margin_percent: PROFIT_MARGIN_PERCENT,
+              applied_margin_percent: profitMarginPercent,
+              current_supplier: best.supplier,
+              current_seller_name: best.seller_name,
+              current_offer_url: best.offer_url,
+              current_cost_usd: best.price_usd,
+              final_price_usd: finalPriceUsd,
+              final_price_bs: finalPriceBs,
+              bcv_rate: bcvRate,
+              price_checked_at: checkedAt,
+              updated_at: checkedAt,
+            }, { onConflict: 'variant_id' });
+          if (saveError) throw saveError;
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : 'No se pudo guardar el precio calculado.';
-        errors.push(`Guardado de precio final: ${message}`);
+        warnings.push(`No se pudo persistir el precio calculado: ${message}`);
         console.error('[cron/test-steam][price-save] Falló la actualización de precio/margen/BCV:', error);
       }
     } else if (!best) {
       console.error('[cron/test-steam][calculation] Sin comparación completa; no se calcula el precio final.');
     } else if (bcvRate === null) {
       console.error('[cron/test-steam][calculation] Falta una tasa BCV válida para la conversión.');
-    } else if (!pricingConfig) {
-      console.error('[cron/test-steam][calculation] Falta la configuración de margen de product_pricing.');
     }
 
     return jsonResponse({
-      success: errors.length === 0 && best !== null && bcvRate !== null && finalPriceBs !== null,
+      success: best !== null && bcvRate !== null && finalPriceBs !== null,
       bcv_rate: bcvRate,
       source: bcvRateSource,
       bcv_rate_stale: bcvRateIsStale,

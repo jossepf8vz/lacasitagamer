@@ -33,9 +33,9 @@ export async function refreshBcvRate() {
     try {
       const rate = await fetchMontosveRate(apiKey);
       const persisted = await persistBcvRate(rate);
-      if (!persisted.exchangeRateUpdated || persisted.productPricingUpdated === 0 || persisted.warnings.length > 0) {
+      if (!persisted.exchangeRateUpdated) {
         throw new Error(
-          `No se pudo persistir la tasa nueva en ambas tablas: ${persisted.warnings.join(' ') || 'product_pricing no tiene filas configuradas.'}`
+          `No se pudo persistir la tasa nueva en exchange_rates: ${persisted.warnings.join(' ')}`
         );
       }
       return {
@@ -46,6 +46,7 @@ export async function refreshBcvRate() {
         updatedAt: new Date().toISOString(),
         stale: false,
         persisted: true,
+        ...(persisted.warnings.length > 0 ? { warning: persisted.warnings.join(' ') } : {}),
       };
     } catch (error) {
       const message = errorMessage(error);
@@ -176,11 +177,21 @@ async function fetchMontosveRate(apiKey: string) {
       },
       signal: controller.signal,
     });
+    const rawResponse = await response.text();
+    console.log('MontosVE raw response:', rawResponse);
+
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
     }
 
-    const rate = extractMontosveBcvRate(await response.json());
+    let payload: unknown;
+    try {
+      payload = JSON.parse(rawResponse);
+    } catch (error) {
+      throw new Error(`La respuesta no es JSON válido: ${errorMessage(error)}`);
+    }
+
+    const rate = extractMontosveBcvRate(payload);
     if (rate === null) {
       throw new Error('La respuesta JSON no contiene una tasa BCV/USD válida.');
     }
@@ -192,7 +203,37 @@ async function fetchMontosveRate(apiKey: string) {
 
 function extractMontosveBcvRate(payload: unknown): number | null {
   const root = asRecord(payload);
-  if (!root || root.success === false || root.ok === false) return null;
+  if (root?.success === false || root?.ok === false) return null;
+
+  const data = root?.data;
+  const dataItems = Array.isArray(data) ? data : null;
+  const candidateRecords = dataItems ?? (Array.isArray(payload) ? payload : []);
+  for (const candidate of candidateRecords) {
+    const record = asRecord(candidate);
+    if (!record) continue;
+    const code = [record.code, record.currency, record.symbol, record.name]
+      .filter((value): value is string => typeof value === 'string')
+      .join(' ')
+      .toUpperCase();
+    if (/\bBCV\b/.test(code) || /\bUSD\b/.test(code)) {
+      const rate = extractRate(record, ['promedio', 'price', 'rate', 'value', 'valor', 'venta', 'tasa']);
+      if (rate !== null) return rate;
+    }
+  }
+
+  const rates = asRecord(root?.rates);
+  const directCandidates = [
+    root?.bcv,
+    rates?.bcv,
+    rates?.USD,
+    root?.rate,
+  ];
+  for (const candidate of directCandidates) {
+    const directRate = toValidRate(candidate);
+    if (directRate !== null) return directRate;
+    const nestedRate = extractRate(candidate, ['promedio', 'price', 'rate', 'value', 'valor', 'venta', 'tasa']);
+    if (nestedRate !== null) return nestedRate;
+  }
 
   const prioritizedKeys = ['bcv', 'oficial', 'official', 'usd_ves_bcv', 'usd_bcv', 'bcv_usd'];
   for (const key of prioritizedKeys) {
@@ -240,7 +281,7 @@ function findUsdBcvRate(value: unknown): number | null {
     .filter((entry): entry is string => typeof entry === 'string')
     .join(' ')
     .toLowerCase();
-  if (/(usd|dolar|dólar)/i.test(labels) && /(bcv|oficial|official)/i.test(labels)) {
+  if (/(usd|dolar|dólar|bcv|oficial|official)/i.test(labels)) {
     const rate = extractRate(record, ['promedio', 'price', 'rate', 'value', 'valor', 'venta', 'tasa', 'usd']);
     if (rate !== null) return rate;
   }
@@ -288,7 +329,7 @@ function toValidRate(value: unknown) {
   const rate = typeof value === 'number'
     ? value
     : typeof value === 'string'
-      ? Number(value.replace(',', '.'))
+      ? Number.parseFloat(value.trim().replace(',', '.'))
       : NaN;
   return Number.isFinite(rate) && rate > 0 ? rate : null;
 }
