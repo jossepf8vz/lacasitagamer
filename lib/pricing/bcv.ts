@@ -1,6 +1,6 @@
 import { getSupabaseServerClient } from '../supabase/server';
 
-const MONTOSVE_RATES_URL = 'https://api.montosve.com/v1/fx/rates';
+const MONTOSVE_RATES_URL = 'https://api.montosve.com/v1/tasas/actual';
 const BCV_RATE_SOURCE = 'bcv_official_ves';
 const SOURCE_TIMEOUT_MS = 6000;
 const STEAM_VARIANT_ID = 'v-s10-glo';
