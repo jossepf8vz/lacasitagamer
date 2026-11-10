@@ -14,4 +14,8 @@ Las URLs solo se consultan en HTTPS y los hosts están limitados a `g2a.com`, `e
 3. `vercel.json` programa `/api/cron/binance-rate` cada cinco minutos. El panel de administración también solicita una actualización al abrir Analíticas y lee la tasa y su fecha guardadas; la ruta privada requiere el rol admin.
 4. La tasa almacenada es la mediana de hasta diez ofertas válidas de venta USDT/VES devueltas por Binance P2P. La disponibilidad del cron programado depende del plan de Vercel; si el plan no admite esta frecuencia, configura un scheduler externo para llamar la misma ruta con `Authorization: Bearer <CRON_SECRET>`.
 
-La tasa se consulta y persiste únicamente en el servidor; no se incluye en el encabezado público de la tienda.
+## Tasa BCV y prueba de Steam
+
+- `/api/bcv-rate` consulta la tasa oficial, la guarda en `exchange_rates` con el origen `bcv_official_ves` y la devuelve a la PWA para mostrarla en el banner.
+- `/api/cron/test-steam` actualiza la tasa BCV, consulta los proveedores configurados para `v-s10-glo` (Steam Gift Card $10) y guarda los resultados en `supplier_price_checks`. Requiere `Authorization: Bearer <CRON_SECRET>`; solo declara éxito si al menos un proveedor devuelve un precio válido.
+- Binance P2P permanece privado; la tasa BCV se expone únicamente a través de la API pública utilizada por el banner.

@@ -853,7 +853,7 @@ export default function App() {
       const timeout = setTimeout(() => requestController.abort(), 10000);
 
       try {
-        const response = await fetch('https://ve.dolarapi.com/v1/dolares/oficial', {
+        const response = await fetch('/api/bcv-rate', {
           cache: 'no-store',
           signal: requestController.signal,
         });
@@ -866,7 +866,7 @@ export default function App() {
           throw new Error('La respuesta de la API BCV no contiene una tasa válida.');
         }
 
-        const rawRate = 'promedio' in data ? data.promedio : 'price' in data ? data.price : null;
+        const rawRate = 'rate' in data ? data.rate : null;
         const rate = typeof rawRate === 'number' || typeof rawRate === 'string' ? Number(rawRate) : NaN;
         if (!Number.isFinite(rate) || rate <= 0) {
           throw new Error('La respuesta de la API BCV no contiene una tasa válida.');
