@@ -51,6 +51,14 @@ function jsonResponse(body: Record<string, unknown>) {
   });
 }
 
+function getErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'object' && error !== null && 'message' in error && typeof error.message === 'string') {
+    return error.message;
+  }
+  return fallback;
+}
+
 export async function GET(request: Request) {
   const cronSecret = process.env.CRON_SECRET;
   if (!cronSecret || request.headers.get('authorization') !== `Bearer ${cronSecret}`) {
@@ -179,10 +187,22 @@ export async function GET(request: Request) {
       try {
         const { error: saveError } = await supabase
           .from('supplier_price_checks')
-          .upsert(results, { onConflict: 'variant_id,supplier' });
+          .upsert(
+            results.map((result) => ({
+              variant_id: result.variant_id,
+              supplier: result.supplier,
+              source_url: result.source_url,
+              price_usd: result.price_usd,
+              seller_name: result.seller_name,
+              offer_url: result.offer_url,
+              error: result.error,
+              checked_at: result.checked_at,
+            })),
+            { onConflict: 'variant_id,supplier' }
+          );
         if (saveError) throw saveError;
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'No se pudieron guardar los precios.';
+        const message = getErrorMessage(error, 'No se pudieron guardar los precios.');
         errors.push(`Guardado de ofertas: ${message}`);
         console.error('[cron/test-steam][offer-save] Falló el upsert de supplier_price_checks:', error);
       }
@@ -217,20 +237,20 @@ export async function GET(request: Request) {
         if (!supabase) {
           warnings.push('Supabase no está disponible; no se pudo persistir el precio calculado.');
         } else {
-          const { error: saveError } = await supabase
+          const { error: pricingErr } = await supabase
             .from('product_pricing')
             .upsert({
-              variant_id: 'v-s10-glo',
-              applied_margin_percent: 33,
+              variant_id: VARIANT_ID,
+              applied_margin_percent: PROFIT_MARGIN_PERCENT,
               bcv_rate: bcvRate,
               final_price_usd: finalPriceUsd,
               final_price_bs: finalPriceBs,
               updated_at: new Date().toISOString(),
             }, { onConflict: 'variant_id' });
-          if (saveError) throw saveError;
+          if (pricingErr) throw pricingErr;
         }
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'No se pudo guardar el precio calculado.';
+        const message = getErrorMessage(error, 'No se pudo guardar el precio calculado.');
         warnings.push(`No se pudo persistir el precio calculado: ${message}`);
         console.error('[cron/test-steam][price-save] Falló la actualización de precio/margen/BCV:', error);
       }
