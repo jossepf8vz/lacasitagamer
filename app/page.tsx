@@ -928,8 +928,26 @@ export default function App() {
     fetch(`/api/product-prices?${query}`, { signal: controller.signal, cache: 'no-store' })
       .then(async (response) => {
         const data = await response.json();
+        console.log('API Prices Response:', data);
         if (!response.ok) throw new Error(data.error ?? 'No se pudieron cargar los precios configurados.');
-        setSupplierPriceOverrides(data.prices ?? {});
+
+        if (typeof data.prices !== 'object' || data.prices === null || Array.isArray(data.prices)) {
+          throw new Error('La respuesta de precios no contiene un mapa válido de variantes.');
+        }
+
+        const priceOverrides: Record<string, { final_usd: number; final_bs: number }> = {};
+        Object.entries(data.prices as Record<string, unknown>).forEach(([variantId, value]) => {
+          if (typeof value !== 'object' || value === null || Array.isArray(value)) return;
+
+          const price = value as Record<string, unknown>;
+          const finalUsd = Number(price.final_usd ?? price.final_price_usd ?? price.price_usd);
+          const finalBs = Number(price.final_bs ?? price.final_price_bs ?? price.price_bs);
+          if (!Number.isFinite(finalUsd) || finalUsd <= 0 || !Number.isFinite(finalBs) || finalBs <= 0) return;
+
+          priceOverrides[variantId] = { final_usd: finalUsd, final_bs: finalBs };
+        });
+
+        setSupplierPriceOverrides(priceOverrides);
         setSupplierPriceLoadError(null);
       })
       .catch((error) => {
