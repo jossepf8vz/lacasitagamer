@@ -574,6 +574,8 @@ const MOCK_GAMES = [
   }
 ];
 
+const STORE_CATALOG = MOCK_GAMES.filter((game) => game.id === 'g-steam-10');
+
 const CATEGORIES = [
   { name: 'Todos', icon: Gamepad2, color: 'from-violet-500 to-purple-600' },
   { name: 'Gift Cards', icon: Tag, color: 'from-blue-500 to-cyan-500' },
@@ -584,10 +586,7 @@ const CATEGORIES = [
 ];
 
 const FEATURED_OFFERS = [
-  { gameId: 'g-steam-20', variantId: 'v-s20-glo', icon: '🔥', headline: '¡Compra en Oferta!' },
-  { gameId: 'g-xbox-20', variantId: 'v-x20-us', icon: '🎮', headline: 'Oferta gamer destacada' },
-  { gameId: 'g-psn-25', variantId: 'v-ps25-us', icon: '✨', headline: '¡Aprovecha esta oferta!' },
-  { gameId: 'g-nin-50', variantId: 'v-n50-us', icon: '🕹️', headline: 'Oferta gamer destacada' }
+  { gameId: 'g-steam-10', variantId: 'v-s10-glo', icon: '🔥', headline: '¡Compra en Oferta!' },
 ];
 
 const FEATURED_OFFER_INTERVALS = [5000, 55000, 105000];
@@ -818,7 +817,7 @@ export default function App() {
     }
   ]);
 
-  const heroItems = useMemo(() => MOCK_GAMES.filter(g => g.featured), []);
+  const heroItems = useMemo(() => STORE_CATALOG, []);
 
   useEffect(() => {
     if (heroItems.length === 0) return;
@@ -1348,7 +1347,7 @@ export default function App() {
   };
 
   const filteredProducts = useMemo(() => {
-    return MOCK_GAMES.filter(game => {
+    return STORE_CATALOG.filter(game => {
       const matchesCategory = selectedCategory === 'Todos' || game.category === selectedCategory;
 
       let matchesSubCategory = true;
