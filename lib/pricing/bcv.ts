@@ -268,8 +268,8 @@ async function persistBcvRate(rate: number): Promise<PersistResult> {
     const { error } = await supabase
       .from('exchange_rates')
       .upsert(
-        { source: BCV_RATE_SOURCE, rate, updated_at: updatedAt },
-        { onConflict: 'source' }
+        { currency: 'USD', rate, updated_at: updatedAt },
+        { onConflict: 'currency' }
       );
     if (error) throw error;
     exchangeRateUpdated = true;

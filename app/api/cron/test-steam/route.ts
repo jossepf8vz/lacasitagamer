@@ -27,12 +27,6 @@ type SupplierRow = {
   url: string;
 };
 
-type PricingRow = {
-  variant_id: string;
-  product_id: string;
-  applied_margin_percent: number;
-};
-
 const PROVIDER_NAMES: Record<SupplierName, string> = {
   eneba: 'Eneba',
   g2a: 'G2A',
@@ -79,12 +73,6 @@ export async function GET(request: Request) {
   try {
     let supabase: ReturnType<typeof getSupabaseServerClient> | null = null;
     let suppliers: SupplierRow[] = FALLBACK_SUPPLIERS;
-    let pricingConfig: PricingRow = {
-      variant_id: VARIANT_ID,
-      product_id: PRODUCT_ID,
-      applied_margin_percent: PROFIT_MARGIN_PERCENT,
-    };
-    let hasPricingRow = false;
     let shouldPersistSupplierFallback = false;
     try {
       supabase = getSupabaseServerClient();
@@ -95,21 +83,6 @@ export async function GET(request: Request) {
     }
 
     if (supabase) {
-      try {
-        const { data: pricing, error: pricingError } = await supabase
-          .from('product_pricing')
-          .select('variant_id, product_id')
-          .eq('variant_id', VARIANT_ID)
-          .maybeSingle();
-
-        if (pricingError) throw pricingError;
-        if (pricing?.product_id === PRODUCT_ID) {
-          hasPricingRow = true;
-        }
-      } catch (error) {
-        console.error('[cron/test-steam][product-config] Falló la consulta de product_pricing:', error);
-      }
-
       try {
         const { data, error: suppliersError } = await supabase
           .from('product_supplier_urls')
@@ -238,30 +211,21 @@ export async function GET(request: Request) {
 
     if (best && bcvRate !== null) {
       try {
-        profitMarginPercent = pricingConfig.applied_margin_percent;
+        profitMarginPercent = PROFIT_MARGIN_PERCENT;
         finalPriceUsd = Number((best.price_usd! * 1.33).toFixed(2));
         finalPriceBs = Number((finalPriceUsd * bcvRate).toFixed(2));
         if (!supabase) {
           warnings.push('Supabase no está disponible; no se pudo persistir el precio calculado.');
         } else {
-          const priceFields = {
-            final_price_usd: finalPriceUsd,
-            final_price_bs: finalPriceBs,
-            bcv_rate: bcvRate,
-            updated_at: checkedAt,
-          };
-          const { error: saveError } = hasPricingRow
-            ? await supabase
-              .from('product_pricing')
-              .update(priceFields)
-              .eq('variant_id', VARIANT_ID)
-            : await supabase
+          const { error: saveError } = await supabase
             .from('product_pricing')
             .upsert({
-              variant_id: VARIANT_ID,
-              product_id: PRODUCT_ID,
-              profit_margin_percent: PROFIT_MARGIN_PERCENT,
-              ...priceFields,
+              variant_id: 'v-s10-glo',
+              applied_margin_percent: 33,
+              bcv_rate: bcvRate,
+              final_price_usd: finalPriceUsd,
+              final_price_bs: finalPriceBs,
+              updated_at: new Date().toISOString(),
             }, { onConflict: 'variant_id' });
           if (saveError) throw saveError;
         }
