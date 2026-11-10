@@ -9,7 +9,13 @@ const BCV_SOURCES = [
   {
     name: 'pydolarve.org',
     url: 'https://pydolarve.org/api/v1/dollar?page=bcv',
-    rateKeys: ['promedio', 'bcv', 'price', 'valor', 'value', 'rate', 'venta', 'tasa'],
+    rateKeys: ['promedio', 'price'],
+  },
+  {
+    name: 'bcv.org.ve',
+    url: 'https://www.bcv.org.ve',
+    rateKeys: [],
+    html: true,
   },
 ] as const;
 const BCV_RATE_SOURCE = 'bcv_official_ves';
@@ -38,7 +44,7 @@ export async function refreshBcvRate() {
 
   for (const source of BCV_SOURCES) {
     try {
-      const rate = await fetchRate(source.url, source.rateKeys);
+      const rate = await fetchRate(source.url, source.rateKeys, 'html' in source && source.html);
       const persisted = await persistBcvRate(rate);
       return {
         success: true as const,
@@ -194,29 +200,48 @@ export async function getStoredBcvRate(): Promise<StoredRate | null> {
   };
 }
 
-async function fetchRate(url: string, rateKeys: readonly string[]) {
+async function fetchRate(url: string, rateKeys: readonly string[], isHtml = false) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), SOURCE_TIMEOUT_MS);
 
   try {
     const response = await fetch(url, {
       cache: 'no-store',
-      headers: { Accept: 'application/json' },
+      headers: { Accept: isHtml ? 'text/html' : 'application/json' },
       signal: controller.signal,
     });
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
     }
 
-    const payload: unknown = await response.json();
-    const rate = extractRate(payload, rateKeys);
+    const rate = isHtml
+      ? extractBcvHtmlRate(await response.text())
+      : extractRate(await response.json(), rateKeys);
     if (rate === null) {
-      throw new Error('La respuesta JSON no contiene una tasa numérica válida.');
+      throw new Error(isHtml
+        ? 'El HTML del BCV no contiene una tasa válida dentro de #dolar.'
+        : 'La respuesta JSON no contiene una tasa numérica válida.');
     }
     return rate;
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function extractBcvHtmlRate(html: string): number | null {
+  const dolarDiv = html.match(/<div\b(?=[^>]*\bid\s*=\s*["']dolar["'])[^>]*>([\s\S]*?)<\/div\s*>/i)?.[1];
+  if (!dolarDiv) return null;
+
+  const withoutActiveContent = dolarDiv
+    .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;|&#160;|&#xA0;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const numericText = withoutActiveContent.match(/\d+(?:[.,]\d+)?/)?.[0];
+  if (!numericText) return null;
+  return toValidRate(numericText.replace(',', '.'));
 }
 
 function extractRate(value: unknown, rateKeys: readonly string[]): number | null {
