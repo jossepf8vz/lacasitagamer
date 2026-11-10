@@ -3,6 +3,8 @@ import { refreshBcvRate } from '../../../lib/pricing/bcv';
 import { getSupabaseServerClient } from '../../../lib/supabase/server';
 
 export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
 
 type PricingRow = {
   variant_id: string;
