@@ -611,6 +611,30 @@ type SupplierComparisonResult = {
   used_fallback: boolean;
 };
 
+type SaleSupplierPrice = {
+  supplier: string;
+  url?: string;
+  price_usd: number | null;
+};
+
+const SALE_SUPPLIERS = [
+  { name: 'Eneba', id: 'eneba' },
+  { name: 'G2A', id: 'g2a' },
+  { name: 'Eldorado', id: 'eldorado' },
+] as const;
+
+function getSupplierSearchUrl(supplier: typeof SALE_SUPPLIERS[number]['id'], productName: string) {
+  const query = encodeURIComponent(productName);
+  switch (supplier) {
+    case 'eneba':
+      return `https://www.eneba.com/marketplace?text=${query}`;
+    case 'g2a':
+      return `https://www.g2a.com/search?query=${query}`;
+    case 'eldorado':
+      return `https://www.eldorado.gg/search?query=${query}`;
+  }
+}
+
 function RecentActivityNotification({
   onProductClick,
 }: {
@@ -729,6 +753,7 @@ export default function App() {
   const [supplierComparison, setSupplierComparison] = useState<SupplierComparisonResult | null>(null);
   const [supplierComparisonError, setSupplierComparisonError] = useState<string | null>(null);
   const [isRefreshingSupplierPrices, setIsRefreshingSupplierPrices] = useState(false);
+  const [saleSupplierPrices, setSaleSupplierPrices] = useState<Record<string, SaleSupplierPrice[]>>({});
 
   // Formulario Checkout
   const [checkoutForm, setCheckoutForm] = useState({
@@ -947,6 +972,59 @@ export default function App() {
       unsubscribe();
     };
   }, []);
+
+  useEffect(() => {
+    if (!isAdminAuthenticated || activeTab !== 'admin' || adminTab !== 'sales') return;
+
+    let active = true;
+    const controller = new AbortController();
+    const variantIds = Array.from(new Set(
+      adminSalesHistory.flatMap((sale) => sale.items.map((item) => item.variantId))
+    ));
+
+    const loadSaleSupplierPrices = async () => {
+      try {
+        const { data, error } = await getSupabaseBrowserClient().auth.getSession();
+        if (error) throw error;
+        const accessToken = data.session?.access_token;
+        if (!accessToken) throw new Error('La sesión de administrador expiró.');
+
+        const entries = await Promise.all(variantIds.map(async (variantId) => {
+          try {
+            const response = await fetch('/api/fetch-best-price', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: ['Bear' + 'er', accessToken].join(' '),
+              },
+              body: JSON.stringify({ variantId }),
+              cache: 'no-store',
+              signal: controller.signal,
+            });
+            const result = await response.json();
+            if (!active || !Array.isArray(result.comparisons)) return [variantId, []] as const;
+            return [variantId, result.comparisons as SaleSupplierPrice[]] as const;
+          } catch (error) {
+            if (controller.signal.aborted) return [variantId, []] as const;
+            console.error(`No se pudieron consultar proveedores para ${variantId}:`, error);
+            return [variantId, []] as const;
+          }
+        }));
+
+        if (active) setSaleSupplierPrices(Object.fromEntries(entries));
+      } catch (error) {
+        if (active && !controller.signal.aborted) {
+          console.error('No se pudieron cargar precios para el fulfillment de ventas:', error);
+        }
+      }
+    };
+
+    void loadSaleSupplierPrices();
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [activeTab, adminSalesHistory, adminTab, isAdminAuthenticated]);
 
   useEffect(() => {
     if (!isAdminAuthenticated || activeTab !== 'admin') return;
@@ -1501,18 +1579,31 @@ export default function App() {
                               <p className="mt-0.5 text-[11px] text-slate-400">Precio de venta: ${item.priceUsd.toFixed(2)} USD</p>
                             </div>
 
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setSelectedSupplierVariantId(item.variantId);
-                                setSupplierComparison(null);
-                                setSupplierComparisonError(null);
-                                setAdminTab('suppliers');
-                              }}
-                              className="rounded-lg bg-gradient-to-r from-purple-600 to-indigo-600 px-3 py-1.5 text-[10px] font-bold text-white shadow transition hover:from-purple-500 hover:to-indigo-500"
-                            >
-                              Comparar proveedores
-                            </button>
+                            <div className="grid w-full grid-cols-1 gap-2 sm:w-auto sm:grid-cols-3">
+                              {SALE_SUPPLIERS.map((supplier) => {
+                                const comparison = saleSupplierPrices[item.variantId]?.find(
+                                  (price) => price.supplier.toLowerCase() === supplier.id
+                                );
+                                return (
+                                  <a
+                                    key={supplier.id}
+                                    href={comparison?.url ?? getSupplierSearchUrl(supplier.id, item.name)}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="flex min-w-32 items-center justify-between gap-3 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-left transition hover:border-purple-500/60 hover:bg-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-400"
+                                    aria-label={`${supplier.name}: ${comparison?.price_usd === null || !comparison ? 'No disponible' : `$${comparison.price_usd.toFixed(2)} USD`}. Abrir búsqueda del producto en ${supplier.name}.`}
+                                  >
+                                    <span>
+                                      <span className="block text-[10px] font-bold text-slate-200">{supplier.name}</span>
+                                      <span className={`block text-[10px] font-mono ${comparison?.price_usd ? 'text-cyan-300' : 'text-slate-500'}`}>
+                                        {comparison?.price_usd ? `$${comparison.price_usd.toFixed(2)} USD` : 'No disponible'}
+                                      </span>
+                                    </span>
+                                    <ArrowUpRight className="h-3.5 w-3.5 shrink-0 text-purple-300" aria-hidden="true" />
+                                  </a>
+                                );
+                              })}
+                            </div>
                           </div>
                         ))}
                       </div>
