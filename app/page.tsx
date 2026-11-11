@@ -615,49 +615,13 @@ type SupplierComparisonResult = {
 
 type SaleSupplierPrice = {
   supplier: string;
-  url?: string;
+  source_url: string;
   offer_url?: string | null;
   seller_name?: string | null;
   price_usd: number | null;
   final_price_usd?: number | null;
+  checked_at: string;
 };
-
-const SALE_SUPPLIERS = [
-  { name: 'Eneba', id: 'eneba' },
-  { name: 'G2A', id: 'g2a' },
-  { name: 'Eldorado', id: 'eldorado' },
-] as const;
-
-function getSupplierSearchUrl(supplier: typeof SALE_SUPPLIERS[number]['id'], productName: string) {
-  const query = encodeURIComponent(productName);
-  switch (supplier) {
-    case 'eneba':
-      return `https://www.eneba.com/marketplace?text=${query}`;
-    case 'g2a':
-      return `https://www.g2a.com/search?query=${query}`;
-    case 'eldorado':
-      return `https://www.eldorado.gg/search?query=${query}`;
-  }
-}
-
-function getSupplierFinalPrice(comparison: SaleSupplierPrice | undefined) {
-  if (!comparison || comparison.price_usd === null) return null;
-  return comparison.final_price_usd
-    ?? Number((comparison.price_usd * 1.33).toFixed(2));
-}
-
-function getRecommendedSupplier(prices: SaleSupplierPrice[]) {
-  return prices
-    .filter((price) => ['eneba', 'g2a'].includes(price.supplier.toLowerCase()) && price.price_usd !== null)
-    .reduce<SaleSupplierPrice | null>((best, current) => {
-      const currentFinalPrice = getSupplierFinalPrice(current);
-      const bestFinalPrice = getSupplierFinalPrice(best ?? undefined);
-      return currentFinalPrice !== null
-        && (bestFinalPrice === null || currentFinalPrice < bestFinalPrice)
-        ? current
-        : best;
-    }, null);
-}
 
 function RecentActivityNotification({
   onProductClick,
@@ -778,8 +742,6 @@ export default function App() {
   const [supplierComparisonError, setSupplierComparisonError] = useState<string | null>(null);
   const [isRefreshingSupplierPrices, setIsRefreshingSupplierPrices] = useState(false);
   const [saleSupplierPrices, setSaleSupplierPrices] = useState<Record<string, SaleSupplierPrice[]>>({});
-  const steamSupplierPrices = saleSupplierPrices['v-s10-glo'] ?? [];
-  const recommendedSteamSupplier = getRecommendedSupplier(steamSupplierPrices);
 
   // Formulario Checkout
   const [checkoutForm, setCheckoutForm] = useState({
@@ -1028,42 +990,42 @@ export default function App() {
     let active = true;
     const controller = new AbortController();
     const variantIds = Array.from(new Set(
-      ['v-s10-glo', ...adminSalesHistory.flatMap((sale) => sale.items.map((item) => item.variantId))]
+      adminSalesHistory.flatMap((sale) => sale.items.map((item) => item.variantId))
     ));
 
     const loadSaleSupplierPrices = async () => {
+      if (variantIds.length === 0) {
+        setSaleSupplierPrices({});
+        return;
+      }
+
       try {
         const { data, error } = await getSupabaseBrowserClient().auth.getSession();
         if (error) throw error;
         const accessToken = data.session?.access_token;
         if (!accessToken) throw new Error('La sesión de administrador expiró.');
 
-        const entries = await Promise.all(variantIds.map(async (variantId) => {
-          try {
-            const response = await fetch('/api/fetch-best-price', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                Authorization: ['Bear' + 'er', accessToken].join(' '),
-              },
-              body: JSON.stringify({ variantId }),
-              cache: 'no-store',
-              signal: controller.signal,
-            });
-            const result = await response.json();
-            if (!active || !Array.isArray(result.comparisons)) return [variantId, []] as const;
-            return [variantId, result.comparisons as SaleSupplierPrice[]] as const;
-          } catch (error) {
-            if (controller.signal.aborted) return [variantId, []] as const;
-            console.error(`No se pudieron consultar proveedores para ${variantId}:`, error);
-            return [variantId, []] as const;
-          }
-        }));
+        const response = await fetch('/api/admin/supplier-prices', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: ['Bear' + 'er', accessToken].join(' '),
+          },
+          body: JSON.stringify({ variantIds }),
+          cache: 'no-store',
+          signal: controller.signal,
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error ?? 'No se pudieron cargar precios de proveedores.');
+        if (!result.prices || typeof result.prices !== 'object') {
+          throw new Error('La respuesta de precios de proveedores no es válida.');
+        }
 
-        if (active) setSaleSupplierPrices(Object.fromEntries(entries));
+        if (active) setSaleSupplierPrices(result.prices as Record<string, SaleSupplierPrice[]>);
       } catch (error) {
         if (active && !controller.signal.aborted) {
           console.error('No se pudieron cargar precios para el fulfillment de ventas:', error);
+          setSaleSupplierPrices({});
         }
       }
     };
@@ -1620,70 +1582,6 @@ export default function App() {
                   <CheckCircle2 className="w-5 h-5 text-emerald-400" /> Ventas Registradas y Recomendación de Compra por Proveedor
                 </h2>
 
-                <section className="rounded-2xl border border-purple-500/30 bg-slate-950 p-4">
-                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                    <div>
-                      <h3 className="font-bold text-white">Steam Gift Card $10 — comparación Eneba vs G2A</h3>
-                      <p className="text-xs text-slate-400">Precios actuales consultados en paralelo; el precio final incluye margen del 33%.</p>
-                    </div>
-                    {recommendedSteamSupplier && (
-                      <span className="rounded-full border border-emerald-400/40 bg-emerald-500/15 px-3 py-1 text-xs font-bold text-emerald-300">
-                        Mejor compra: {recommendedSteamSupplier.supplier.toUpperCase()}
-                      </span>
-                    )}
-                  </div>
-
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    {SALE_SUPPLIERS.filter((supplier) => supplier.id === 'eneba' || supplier.id === 'g2a').map((supplier) => {
-                      const comparison = steamSupplierPrices.find(
-                        (price) => price.supplier.toLowerCase() === supplier.id
-                      );
-                      const finalPrice = getSupplierFinalPrice(comparison);
-                      const isRecommended = comparison === recommendedSteamSupplier && comparison !== undefined;
-                      const offerUrl = comparison?.offer_url ?? comparison?.url
-                        ?? (supplier.id === 'eneba'
-                          ? 'https://www.eneba.com/latam/steam-gift-card-steam-wallet-gift-card-10-usd-steam-key-united-states'
-                          : 'https://www.g2a.com/es/steam-gift-card-10-usd-steam-key-global-i10000000258127');
-
-                      return (
-                        <article
-                          key={supplier.id}
-                          className={`rounded-xl border p-4 ${isRecommended ? 'border-emerald-400/60 bg-emerald-950/20' : 'border-slate-800 bg-slate-900/70'}`}
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <h4 className="font-bold text-white">{supplier.name}</h4>
-                            {isRecommended && (
-                              <span className="rounded bg-emerald-500/20 px-2 py-0.5 text-[10px] font-bold text-emerald-300">
-                                MEJOR OPCIÓN DE COMPRA
-                              </span>
-                            )}
-                          </div>
-                          {comparison?.seller_name && (
-                            <p className="mt-1 text-xs text-slate-400">Vendedor: {comparison.seller_name}</p>
-                          )}
-                          <p className="mt-3 text-xs text-slate-400">Costo actual</p>
-                          <p className="font-mono text-lg text-cyan-200">
-                            {comparison?.price_usd == null ? 'No disponible' : `$${comparison.price_usd.toFixed(2)} USD`}
-                          </p>
-                          <p className="mt-2 text-xs text-slate-400">Precio calculado con margen del 33%</p>
-                          <p className="font-mono text-sm font-bold text-white">
-                            {finalPrice === null ? '—' : `$${finalPrice.toFixed(2)} USD`}
-                          </p>
-                          <a
-                            href={offerUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="mt-3 inline-flex items-center gap-1 text-xs text-purple-300 underline decoration-purple-500/50 underline-offset-2 hover:text-white"
-                          >
-                            Abrir oferta de {supplier.name}
-                            <ArrowUpRight className="h-3.5 w-3.5" aria-hidden="true" />
-                          </a>
-                        </article>
-                      );
-                    })}
-                  </div>
-                </section>
-                
                 <div className="space-y-4">
                   {adminSalesHistory.map(sale => (
                     <div key={sale.id} className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-3">
@@ -1715,39 +1613,36 @@ export default function App() {
                           <ArrowUpRight className="w-3.5 h-3.5" /> Fulfillment y proveedores:
                         </p>
                         {sale.items.map((item, idx) => (
-                          <div key={idx} className="bg-slate-900/90 p-3 rounded-xl border border-slate-800 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
-                            <div>
+                          <div key={idx} className="bg-slate-900/90 p-3 rounded-xl border border-slate-800 flex flex-col lg:flex-row justify-between items-start lg:items-center gap-3">
+                            <div className="shrink-0">
                               <p className="font-bold text-white text-xs">{item.name}</p>
                               <p className="mt-0.5 text-[11px] text-slate-400">Precio de venta: ${item.priceUsd.toFixed(2)} USD</p>
                             </div>
 
-                            <div className="grid w-full grid-cols-1 gap-2 sm:w-auto sm:grid-cols-3">
-                              {SALE_SUPPLIERS.map((supplier) => {
-                                const comparison = saleSupplierPrices[item.variantId]?.find(
-                                  (price) => price.supplier.toLowerCase() === supplier.id
-                                );
-                                return (
+                            <div className="flex w-full flex-wrap gap-2 lg:justify-end">
+                              {(saleSupplierPrices[item.variantId] ?? []).length > 0
+                                ? saleSupplierPrices[item.variantId].map((comparison) => (
                                   <a
-                                    key={supplier.id}
-                                    href={comparison?.offer_url ?? comparison?.url ?? getSupplierSearchUrl(supplier.id, item.name)}
+                                    key={comparison.supplier}
+                                    href={comparison.offer_url ?? comparison.source_url}
                                     target="_blank"
                                     rel="noopener noreferrer"
-                                    className="flex min-w-32 items-center justify-between gap-3 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-left transition hover:border-purple-500/60 hover:bg-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-400"
-                                    aria-label={`${supplier.name}: ${comparison?.price_usd === null || !comparison ? 'No disponible' : `$${comparison.price_usd.toFixed(2)} USD`}. Abrir búsqueda del producto en ${supplier.name}.`}
+                                    className="flex min-w-36 items-center justify-between gap-3 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-left transition hover:border-purple-500/60 hover:bg-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-400"
+                                    aria-label={`${comparison.supplier}: ${comparison.price_usd === null ? 'No disponible' : `$${comparison.price_usd.toFixed(2)} USD`}. Abrir oferta del proveedor.`}
                                   >
                                     <span>
-                                      <span className="block text-[10px] font-bold text-slate-200">{supplier.name}</span>
-                                      {comparison?.seller_name && (
+                                      <span className="block text-[10px] font-bold capitalize text-slate-200">{comparison.supplier}</span>
+                                      {comparison.seller_name && (
                                         <span className="block text-[9px] text-slate-400">{comparison.seller_name}</span>
                                       )}
-                                      <span className={`block text-[10px] font-mono ${comparison?.price_usd ? 'text-cyan-300' : 'text-slate-500'}`}>
-                                        {comparison?.price_usd ? `$${comparison.price_usd.toFixed(2)} USD` : 'No disponible'}
+                                      <span className={`block text-[10px] font-mono ${comparison.price_usd !== null ? 'text-cyan-300' : 'text-slate-500'}`}>
+                                        {comparison.price_usd === null ? 'No disponible' : `$${comparison.price_usd.toFixed(2)} USD`}
                                       </span>
                                     </span>
                                     <ArrowUpRight className="h-3.5 w-3.5 shrink-0 text-purple-300" aria-hidden="true" />
                                   </a>
-                                );
-                              })}
+                                ))
+                                : <p className="self-center text-[11px] text-slate-500">Sin precios de proveedores registrados para esta variante.</p>}
                             </div>
                           </div>
                         ))}
