@@ -10,7 +10,6 @@ export const maxDuration = 30;
 const VARIANT_ID = 'v-s10-glo';
 const PRODUCT_ID = 'g-steam-10';
 const PRODUCT_NAME = 'Steam Gift Card $10';
-const PROFIT_MARGIN_PERCENT = 33;
 const PSN_VARIANT_ID = 'v-ps10-us';
 const PSN_PRODUCT_ID = 'g-psn-10';
 const PSN_PRODUCT_NAME = 'PlayStation Network Card $10 USD (USA)';
@@ -60,12 +59,24 @@ type PlayStationSyncResult = {
   variant_id: string;
   provider: string;
   best_price_usd: number | null;
+  profit_margin_percent: number | null;
   final_price_usd: number | null;
   final_price_bs: number | null;
   seller_name: string | null;
   offer_url: string | null;
   error?: string;
 };
+
+function calculateTieredPrice(basePriceUsd: number) {
+  const marginPercent = basePriceUsd < 20 ? 33 : basePriceUsd < 50 ? 20 : 8;
+  const fixedFeeUsd = basePriceUsd < 20 ? 0.4 : 0;
+  const finalPriceUsd = Number((basePriceUsd * (1 + marginPercent / 100) + fixedFeeUsd).toFixed(2));
+  return { marginPercent, finalPriceUsd };
+}
+
+function calculatePriceBs(finalPriceUsd: number, bcvRate: number) {
+  return Number((finalPriceUsd * bcvRate).toFixed(2));
+}
 
 function jsonResponse(body: Record<string, unknown>) {
   return NextResponse.json(body, {
@@ -92,6 +103,7 @@ async function syncPlayStationPrice(
     variant_id: PSN_VARIANT_ID,
     provider: 'Eneba',
     best_price_usd: null,
+    profit_margin_percent: null,
     final_price_usd: null,
     final_price_bs: null,
     seller_name: null,
@@ -156,9 +168,10 @@ async function syncPlayStationPrice(
     return result;
   }
 
-  const finalPriceUsd = Number((offer.priceUsd * (1 + PROFIT_MARGIN_PERCENT / 100)).toFixed(2));
-  const finalPriceBs = bcvRate === null ? null : Math.ceil(finalPriceUsd * bcvRate);
+  const { marginPercent, finalPriceUsd } = calculateTieredPrice(offer.priceUsd);
+  const finalPriceBs = bcvRate === null ? null : calculatePriceBs(finalPriceUsd, bcvRate);
   result.best_price_usd = offer.priceUsd;
+  result.profit_margin_percent = marginPercent;
   result.final_price_usd = finalPriceUsd;
   result.final_price_bs = finalPriceBs;
   result.seller_name = offer.sellerName;
@@ -189,7 +202,7 @@ async function syncPlayStationPrice(
       .upsert({
         variant_id: PSN_VARIANT_ID,
         product_id: PSN_PRODUCT_ID,
-        profit_margin_percent: PROFIT_MARGIN_PERCENT,
+        profit_margin_percent: marginPercent,
         category: PSN_CATEGORY,
         platform: 'PlayStation',
         stock: PSN_STOCK,
@@ -197,7 +210,7 @@ async function syncPlayStationPrice(
         current_seller_name: offer.sellerName,
         current_offer_url: offer.offerUrl,
         current_cost_usd: offer.priceUsd,
-        applied_margin_percent: PROFIT_MARGIN_PERCENT,
+        applied_margin_percent: marginPercent,
         final_price_usd: finalPriceUsd,
         ...(bcvRate !== null ? { bcv_rate: bcvRate, final_price_bs: finalPriceBs } : {}),
         price_checked_at: checkedAt,
@@ -317,7 +330,7 @@ export async function GET(request: Request) {
             supplier: supplier.supplier,
             source_url: supplier.url,
             price_usd: offer.priceUsd,
-            final_price_usd: Number((offer.priceUsd * (1 + PROFIT_MARGIN_PERCENT / 100)).toFixed(2)),
+            final_price_usd: calculateTieredPrice(offer.priceUsd).finalPriceUsd,
             seller_name: offer.sellerName,
             offer_url: offer.offerUrl,
             error: null,
@@ -372,7 +385,7 @@ export async function GET(request: Request) {
     const availableBest = results.reduce<SupplierCheck | null>(
       (currentBest, current) => current.final_price_usd === null
         ? currentBest
-        : currentBest === null || current.final_price_usd < currentBest.final_price_usd!
+        : currentBest === null || current.price_usd! < currentBest.price_usd!
           ? current
           : currentBest,
       null
@@ -392,9 +405,10 @@ export async function GET(request: Request) {
 
     if (best) {
       try {
-        profitMarginPercent = PROFIT_MARGIN_PERCENT;
-        finalPriceUsd = best.final_price_usd!;
-        if (bcvRate !== null) finalPriceBs = Number((finalPriceUsd * bcvRate).toFixed(2));
+        const tieredPrice = calculateTieredPrice(best.price_usd!);
+        profitMarginPercent = tieredPrice.marginPercent;
+        finalPriceUsd = tieredPrice.finalPriceUsd;
+        if (bcvRate !== null) finalPriceBs = calculatePriceBs(finalPriceUsd, bcvRate);
         if (!supabase) {
           warnings.push('Supabase no está disponible; no se pudo persistir el precio calculado.');
         } else {
@@ -402,11 +416,13 @@ export async function GET(request: Request) {
             .from('product_pricing')
             .upsert({
               variant_id: VARIANT_ID,
+              product_id: PRODUCT_ID,
+              profit_margin_percent: profitMarginPercent,
               current_supplier: best.supplier,
               current_seller_name: best.seller_name,
               current_offer_url: best.offer_url,
               current_cost_usd: best.price_usd,
-              applied_margin_percent: PROFIT_MARGIN_PERCENT,
+              applied_margin_percent: profitMarginPercent,
               final_price_usd: finalPriceUsd,
               ...(bcvRate !== null ? { bcv_rate: bcvRate, final_price_bs: finalPriceBs } : {}),
               updated_at: new Date().toISOString(),

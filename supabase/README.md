@@ -30,12 +30,14 @@ Ejecuta `migrations/20261111123000_playstation_price_sync.sql` para registrar `v
 
 El catálogo muestra PlayStation Network Card $10 USD (USA) dentro de Gift Cards, con la variante `PlayStation` / `US Store`; el precio utiliza el snapshot sincronizado cuando está disponible.
 
+Ejecuta `migrations/20261111150000_dynamic_tiered_pricing.sql` para retirar el trigger previo que fijaba el margen de Steam en 33% y permitir que Supabase guarde el margen escalonado calculado por el cron. Para todos los productos sincronizados, el cron aplica 33% + $0.40 si el costo base es menor a $20, 20% entre $20 y $49.99, y 8% desde $50. Guarda el precio final USD y la conversión BCV en Bs. redondeados a dos decimales, junto con el porcentaje aplicado.
+
 ## Ofertas de Steam Eneba/G2A
 
 1. Ejecuta `migrations/20261110140000_steam_offer_pricing.sql` y `migrations/20261110150000_steam_margin_33.sql` para guardar vendedor y enlace directo por oferta, el precio ganador, el margen aplicado y el total en Bs. La segunda migración fija el margen de `v-s10-glo` en 33%. La primera también fija las URLs públicas de Eneba y G2A para esa variante.
 2. Programa cron-job.org para llamar `GET /api/cron/test-steam` con `Authorization: Bearer <CRON_SECRET>`. El endpoint responde JSON con HTTP 200 y detalla fallos de proveedor/BCV en el cuerpo.
 3. El parser solo acepta ofertas no patrocinadas que estén presentes en estado JSON público y cuya moneda USD se pueda verificar. No simula un navegador ni sortea desafíos; si la página no expone ofertas parseables, informa proveedor no disponible y no actualiza el precio ganador.
-4. El cron aplica un margen fijo del 33% al costo base del proveedor. La tienda lee el snapshot final guardado por el cron y calcula su equivalente en Bs. con la tasa BCV; el panel muestra el vendedor y enlace disponibles al actualizar la comparación.
+4. El cron aplica el margen escalonado descrito arriba al costo base del proveedor. La tienda lee el snapshot final guardado por el cron y calcula su equivalente en Bs. con la tasa BCV; el panel muestra el vendedor y enlace disponibles al actualizar la comparación.
 
 La ruta `/api/bcv-rate` consulta MontosVE con `X-API-Key` como máximo una vez cada 12 horas en condiciones normales. Si existe una tasa guardada en `exchange_rates` (`currency = 'USD'`, o `source = 'bcv_official_ves'` como compatibilidad) con menos de 12 horas, la reutiliza; si falta la clave o la API falla, devuelve la última tasa válida guardada, incluso si está vencida, y como último respaldo la tasa de la variante Steam en `product_pricing`. Cada tasa externa válida se persiste con fecha actual y recalcula los precios Bs. La clave API debe configurarse como `MONTOSVE_API_KEY` solo en el servidor, nunca con prefijo `NEXT_PUBLIC_`. Devuelve `bcv_rate` y `source`; el checkout también consulta esta ruta cuando todavía no tiene una tasa en memoria y solo detiene el pedido cuando no hay ninguna tasa válida disponible.
 
