@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getStoredBcvRate } from '../../../../lib/pricing/bcv';
+import { fetchMontosveRate, getStoredBcvRate } from '../../../../lib/pricing/bcv';
 import { fetchSupplierOffer, type SupplierName } from '../../../../lib/pricing/suppliers';
 import { getSupabaseServerClient } from '../../../../lib/supabase/server';
 
@@ -9,8 +9,6 @@ export const maxDuration = 30;
 
 const VARIANT_ID = 'v-s10-glo';
 const PRODUCT_NAME = 'Steam Gift Card $10';
-const BCV_URL = 'https://www.bcv.org.ve/';
-const BCV_TIMEOUT_MS = 10000;
 const FALLBACK_SUPPLIERS: SupplierRow[] = [
   {
     supplier: 'eneba',
@@ -85,59 +83,9 @@ function getErrorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
-function parseBcvUsdRate(html: string): number | null {
-  const dollarContainer = html.match(/<[^>]+\bid\s*=\s*["']dolar["'][^>]*>/i);
-  if (!dollarContainer || dollarContainer.index === undefined) return null;
-
-  const contentStart = dollarContainer.index + dollarContainer[0].length;
-  const dollarSection = html.slice(contentStart, contentStart + 5000);
-  const strongValues = Array.from(dollarSection.matchAll(/<strong\b[^>]*>([\s\S]*?)<\/strong>/gi));
-
-  for (const strongValue of strongValues) {
-    const text = strongValue[1]
-      .replace(/<[^>]*>/g, ' ')
-      .replace(/&nbsp;|&#160;|&#xA0;/gi, ' ')
-      .trim();
-    const valueMatch = text.match(/\d[\d\s.,]*/);
-    if (!valueMatch) continue;
-
-    const value = valueMatch[0].replace(/\s/g, '');
-    const normalized = value.includes(',')
-      ? value.replace(/\./g, '').replace(',', '.')
-      : value;
-    const rate = Number.parseFloat(normalized);
-    if (Number.isFinite(rate) && rate >= 1 && rate <= 10000) return rate;
-  }
-  return null;
-}
-
-async function fetchBcvOfficialRate() {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), BCV_TIMEOUT_MS);
-  try {
-    const response = await fetch(BCV_URL, {
-      cache: 'no-store',
-      headers: {
-        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        'Cache-Control': 'no-store',
-        Pragma: 'no-store',
-      },
-      signal: controller.signal,
-    });
-    if (!response.ok) throw new Error(`BCV respondió HTTP ${response.status}.`);
-    const html = await response.text();
-    const rate = parseBcvUsdRate(html);
-    if (rate === null) throw new Error('No se pudo extraer una tasa USD válida del HTML del BCV.');
-    return rate;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
 async function resolveBcvRate(supabase: ReturnType<typeof getSupabaseServerClient> | null) {
   try {
-    const rate = await fetchBcvOfficialRate();
+    const rate = await fetchMontosveRate(process.env.MONTOSVE_API_KEY || '');
     let warning: string | null = null;
     if (supabase) {
       try {
@@ -149,21 +97,22 @@ async function resolveBcvRate(supabase: ReturnType<typeof getSupabaseServerClien
           );
         if (error) throw error;
       } catch (error) {
-        warning = `La tasa en vivo se obtuvo, pero no se pudo guardar en exchange_rates: ${getErrorMessage(error, 'error desconocido')}`;
+        warning = `La tasa de MontosVE se obtuvo, pero no se pudo guardar en exchange_rates: ${getErrorMessage(error, 'error desconocido')}`;
         console.error('[cron/test-steam][bcv-save] Falló el upsert de la tasa oficial:', error);
       }
     } else {
-      warning = 'Supabase no está disponible; no se pudo guardar la tasa BCV en vivo.';
+      warning = 'Supabase no está disponible; no se pudo guardar la tasa de MontosVE.';
     }
-    return { rate, isStale: false, persisted: warning === null, warning };
+    return { rate, source: 'monedasve_api', isStale: false, persisted: warning === null, warning };
   } catch (liveError) {
-    console.error('[cron/test-steam][bcv-live] Falló la consulta directa al BCV:', liveError);
+    console.error('[cron/test-steam][bcv-live] Falló la consulta a MontosVE:', liveError);
     const storedRate = await getStoredBcvRate();
     return {
       rate: storedRate.rate,
+      source: 'supabase_fallback',
       isStale: true,
       persisted: true,
-      warning: `BCV no respondió; se usó la última tasa válida guardada en Supabase (${storedRate.source}).`,
+      warning: `MontosVE no respondió; se usó la última tasa válida guardada en Supabase (${storedRate.source}).`,
     };
   }
 }
@@ -357,6 +306,7 @@ export async function GET(request: Request) {
           }
           return {
             rate: result.rate,
+            source: result.source,
             stale: result.isStale,
             persisted: result.persisted,
           };
@@ -365,7 +315,7 @@ export async function GET(request: Request) {
           const message = error instanceof Error ? error.message : 'No se pudo obtener una tasa BCV válida.';
           errors.push(`Tasa BCV: ${message}`);
           console.error('[cron/test-steam][bcv] No se obtuvo tasa oficial ni fallback:', error);
-          return { rate: null, stale: true, persisted: false };
+          return { rate: null, source: 'monedasve_api', stale: true, persisted: false };
         }),
       Promise.all(suppliers.map(async (supplier): Promise<SupplierCheck> => {
         try {
@@ -475,7 +425,8 @@ export async function GET(request: Request) {
         && products.length > 0
         && products.every((product) => product.success),
       bcv_rate: bcvRate,
-      source: 'bcv_official_scraping',
+      source: 'monedasve_api',
+      rate_source: rateResult.source,
       timestamp: checkedAt,
       bcv_rate_stale: bcvRateIsStale,
       bcv_rate_persisted: rateResult.persisted,
@@ -515,7 +466,7 @@ export async function GET(request: Request) {
     return jsonResponse({
       success: false,
       bcv_rate: bcvRate,
-      source: 'bcv_official_scraping',
+      source: 'monedasve_api',
       timestamp: new Date().toISOString(),
       product: PRODUCT_NAME,
       best_price_usd: null,

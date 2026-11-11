@@ -32,7 +32,7 @@ El catálogo muestra PlayStation Network Card $10 USD (USA) dentro de Gift Cards
 
 Ejecuta `migrations/20261111150000_dynamic_tiered_pricing.sql` para retirar el trigger previo que fijaba el margen de Steam en 33% y permitir que Supabase guarde el margen escalonado calculado por el cron. Para todos los productos sincronizados, el cron aplica 33% más un buffer de $0.40 si el costo base es menor a $20, 20% entre $20 y $49.99, y 8% desde $50. Guarda el precio final USD y la conversión BCV en Bs. redondeados a dos decimales, junto con el porcentaje aplicado.
 
-El cron consulta `https://www.bcv.org.ve/` directamente con `cache: no-store`, `Cache-Control: no-store`, `Pragma: no-store` y un User-Agent de navegador; extrae y valida la tasa del `<strong>` dentro de `#dolar`. La validación TLS del servidor permanece habilitada. Si el scraping falla, usa la última tasa disponible en Supabase y marca `bcv_rate_stale` en la respuesta. El JSON incluye `source: "bcv_official_scraping"`, `timestamp`, `products_updated` como cantidad, `products` con los precios calculados y el detalle de errores o advertencias.
+El cron consulta `https://api.monedasve.com/v1/tasas/actual` directamente con `cache: no-store` y `MONTOSVE_API_KEY`, extrae y valida la tasa BCV/USD del JSON y la guarda inmediatamente en `exchange_rates`. Si la API falla, usa la última tasa disponible en Supabase y marca `bcv_rate_stale` y `rate_source: "supabase_fallback"` en la respuesta. El JSON incluye `source: "monedasve_api"`, `timestamp`, `products_updated` como cantidad, `products` con los precios calculados y el detalle de errores o advertencias.
 
 ## Ofertas de Steam Eneba/G2A
 

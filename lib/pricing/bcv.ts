@@ -1,6 +1,6 @@
 import { getSupabaseServerClient } from '../supabase/server';
 
-const MONTOSVE_RATES_URL = 'https://api.montosve.com/v1/tasas/actual';
+const MONTOSVE_RATES_URL = 'https://api.monedasve.com/v1/tasas/actual';
 const BCV_RATE_SOURCE = 'bcv_official_ves';
 const SOURCE_TIMEOUT_MS = 6000;
 const BCV_RATE_CACHE_SECONDS = 12 * 60 * 60;
@@ -187,13 +187,13 @@ export async function getStoredBcvRate(): Promise<StoredRate | null> {
   );
 }
 
-async function fetchMontosveRate(apiKey: string) {
+export async function fetchMontosveRate(apiKey: string) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), SOURCE_TIMEOUT_MS);
 
   try {
     const response = await fetch(MONTOSVE_RATES_URL, {
-      next: { revalidate: BCV_RATE_CACHE_SECONDS },
+      cache: 'no-store',
       headers: {
         Accept: 'application/json',
         'X-API-Key': apiKey,
@@ -215,7 +215,7 @@ async function fetchMontosveRate(apiKey: string) {
     }
 
     const rate = extractMontosveBcvRate(payload);
-    if (rate === null) {
+    if (rate === null || rate < 1 || rate > 10000) {
       throw new Error('La respuesta JSON no contiene una tasa BCV/USD válida.');
     }
     return rate;
@@ -230,7 +230,11 @@ function extractMontosveBcvRate(payload: unknown): number | null {
 
   const current = asRecord(root?.current);
   const rawUsdRate = current?.usd;
-  const parsedRate = Number.parseFloat(String(rawUsdRate ?? '').trim().replace(',', '.'));
+  const rawValue = String(rawUsdRate ?? '').trim().replace(/\s/g, '');
+  const normalizedValue = rawValue.includes(',')
+    ? rawValue.replace(/\./g, '').replace(',', '.')
+    : rawValue;
+  const parsedRate = Number.parseFloat(normalizedValue);
   return Number.isFinite(parsedRate) && parsedRate > 0 ? parsedRate : null;
 }
 
