@@ -754,7 +754,11 @@ export default function App() {
   const [binanceP2PRateUpdatedAt, setBinanceP2PRateUpdatedAt] = useState<string | null>(null);
   const [binanceP2PRateError, setBinanceP2PRateError] = useState<string | null>(null);
   const [isBinanceP2PRateLoading, setIsBinanceP2PRateLoading] = useState(false);
-  const [supplierPriceOverrides, setSupplierPriceOverrides] = useState<Record<string, { final_usd: number; final_bs: number }>>({});
+  const [supplierPriceOverrides, setSupplierPriceOverrides] = useState<Record<string, {
+    final_usd: number;
+    final_bs: number | null;
+    bcv_rate: number | null;
+  }>>({});
   const [supplierPriceLoadError, setSupplierPriceLoadError] = useState<string | null>(null);
 
   // Navegación e Interfaz PWA
@@ -850,6 +854,7 @@ export default function App() {
     let activeRequest: AbortController | null = null;
 
     const fetchBcvRate = async () => {
+      activeRequest?.abort();
       const requestController = new AbortController();
       activeRequest = requestController;
       const timeout = setTimeout(() => requestController.abort(), 10000);
@@ -902,52 +907,92 @@ export default function App() {
     const refreshTimer = setInterval(() => {
       void fetchBcvRate();
     }, 15 * 60 * 1000);
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') void fetchBcvRate();
+    };
+    window.addEventListener('focus', refreshWhenVisible);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
 
     return () => {
       active = false;
       activeRequest?.abort();
       clearInterval(refreshTimer);
+      window.removeEventListener('focus', refreshWhenVisible);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
     };
   }, []);
 
   useEffect(() => {
-    const controller = new AbortController();
     const variantIds = MOCK_GAMES.flatMap((game) => game.variants.map((variant) => variant.id));
     const query = new URLSearchParams({ variants: variantIds.join(',') });
+    let active = true;
+    let requestController: AbortController | null = null;
 
-    fetch(`/api/product-prices?${query}`, { signal: controller.signal, cache: 'no-store' })
-      .then(async (response) => {
+    const fetchProductPrices = async () => {
+      requestController?.abort();
+      requestController = new AbortController();
+      const signal = requestController.signal;
+
+      try {
+        const response = await fetch(`/api/product-prices?${query}`, {
+          signal,
+          cache: 'no-store',
+        });
         const data = await response.json();
-        console.log('API Prices Response:', data);
         if (!response.ok) throw new Error(data.error ?? 'No se pudieron cargar los precios configurados.');
-
         if (typeof data.prices !== 'object' || data.prices === null || Array.isArray(data.prices)) {
           throw new Error('La respuesta de precios no contiene un mapa válido de variantes.');
         }
 
-        const priceOverrides: Record<string, { final_usd: number; final_bs: number }> = {};
+        const priceOverrides: Record<string, {
+          final_usd: number;
+          final_bs: number | null;
+          bcv_rate: number | null;
+        }> = {};
         Object.entries(data.prices as Record<string, unknown>).forEach(([variantId, value]) => {
           if (typeof value !== 'object' || value === null || Array.isArray(value)) return;
 
           const price = value as Record<string, unknown>;
-          const finalUsd = Number(price.final_usd ?? price.final_price_usd ?? price.price_usd);
-          const finalBs = Number(price.final_bs ?? price.final_price_bs ?? price.price_bs);
-          if (!Number.isFinite(finalUsd) || finalUsd <= 0 || !Number.isFinite(finalBs) || finalBs <= 0) return;
-
-          priceOverrides[variantId] = { final_usd: finalUsd, final_bs: finalBs };
+          const finalUsd = Number(price.final_price_usd);
+          if (!Number.isFinite(finalUsd) || finalUsd <= 0) return;
+          const finalBs = Number(price.final_price_bs);
+          const pricingBcvRate = Number(price.bcv_rate);
+          priceOverrides[variantId] = {
+            final_usd: finalUsd,
+            final_bs: Number.isFinite(finalBs) && finalBs > 0 ? finalBs : null,
+            bcv_rate: Number.isFinite(pricingBcvRate) && pricingBcvRate > 0 ? pricingBcvRate : null,
+          };
         });
 
+        if (!active || signal.aborted) return;
         setSupplierPriceOverrides(priceOverrides);
         setSupplierPriceLoadError(null);
-      })
-      .catch((error) => {
-        if (controller.signal.aborted) return;
+      } catch (error) {
+        if (!active || signal.aborted) return;
         const message = error instanceof Error ? error.message : 'Error desconocido al cargar precios.';
         setSupplierPriceLoadError(message);
         console.error('Error al cargar precios de proveedores:', error);
-      });
+      }
+    };
 
-    return () => controller.abort();
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') void fetchProductPrices();
+    };
+
+    void fetchProductPrices();
+    const refreshTimer = window.setInterval(() => {
+      void fetchProductPrices();
+    }, 15 * 60 * 1000);
+    window.addEventListener('focus', refreshWhenVisible);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
+
+    return () => {
+      active = false;
+      requestController?.abort();
+      window.clearInterval(refreshTimer);
+      window.removeEventListener('focus', refreshWhenVisible);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
+    };
   }, []);
 
   useEffect(() => {
@@ -1273,14 +1318,20 @@ export default function App() {
 
   const priceForVariant = (variant) => supplierPriceOverrides[variant.id]?.final_usd ?? variant.priceUsd;
   const priceBsForVariant = (variant) => {
-    const storedPriceBs = supplierPriceOverrides[variant.id]?.final_bs;
-    if (storedPriceBs !== undefined) {
-      return new Intl.NumberFormat('es-VE', {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      }).format(storedPriceBs);
-    }
-    return calculateBs(priceForVariant(variant));
+    if (bcvRate === null) return '—';
+    const storedPrice = supplierPriceOverrides[variant.id];
+    const storedPriceUsesCurrentRate = storedPrice?.final_bs !== null
+      && storedPrice?.final_bs !== undefined
+      && storedPrice.bcv_rate !== null
+      && storedPrice.bcv_rate !== undefined
+      && Math.abs(storedPrice.bcv_rate - bcvRate) < 0.0000001;
+    const currentPriceBs = storedPriceUsesCurrentRate
+      ? storedPrice.final_bs
+      : Number((priceForVariant(variant) * bcvRate).toFixed(2));
+    return new Intl.NumberFormat('es-VE', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(currentPriceBs);
   };
 
   useEffect(() => {

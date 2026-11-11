@@ -32,7 +32,7 @@ export async function GET(request: Request) {
     const supabase = getSupabaseServerClient();
     const { data, error } = await supabase
       .from('product_pricing')
-      .select('*')
+      .select('variant_id, final_price_usd, final_price_bs, bcv_rate')
       .in('variant_id', variantIds);
 
     if (error) throw error;
@@ -45,6 +45,9 @@ export async function GET(request: Request) {
     return pricesResponse(prices);
   } catch (error) {
     console.error('[api/product-prices] Error al cargar precios.', error);
-    return pricesResponse({});
+    return NextResponse.json(
+      { prices: {}, error: 'No se pudieron cargar los precios actuales del catálogo.' },
+      { status: 502, headers: responseHeaders }
+    );
   }
 }
