@@ -13,6 +13,7 @@ type ConfirmationItem = {
 
 type ConfirmationDetails = {
   items: ConfirmationItem[];
+  name?: string;
   email: string;
   submittedAt: number;
 };
@@ -204,7 +205,9 @@ function SuccessContent() {
                 </li>
               ))}
             </ul>
-            <p className="mt-2 text-xs text-slate-400">Confirmación enviada para: {details.email}</p>
+            <p className="mt-2 text-xs text-slate-400">
+              {details.name ? `${details.name} · ` : ''}Confirmación enviada para: {details.email}
+            </p>
           </div>
         )}
 

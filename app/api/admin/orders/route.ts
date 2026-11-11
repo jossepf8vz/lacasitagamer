@@ -87,6 +87,7 @@ async function toAdminOrders(rows: SaleRow[], supabase: ReturnType<typeof getSup
       databaseId: orderId,
       date: new Intl.DateTimeFormat('es-VE').format(new Date(createdAt)),
       createdAt,
+      customerName: String(customerInfo.name ?? ''),
       customerEmail: String(customerInfo.email ?? ''),
       phone: String(customerInfo.phone ?? ''),
       paymentMethod: String(order.method),

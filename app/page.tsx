@@ -638,6 +638,7 @@ type AdminOrder = {
   databaseId: string;
   date: string;
   createdAt: string;
+  customerName: string;
   customerEmail: string;
   phone: string;
   paymentMethod: string;
@@ -775,6 +776,7 @@ export default function App() {
 
   // Formulario Checkout
   const [checkoutForm, setCheckoutForm] = useState({
+    name: '',
     email: '',
     phone: '',
     paymentMethod: 'pago_movil',
@@ -1403,6 +1405,7 @@ export default function App() {
     setCheckoutError(null);
     if (
       !checkoutForm.email
+      || !checkoutForm.name
       || !checkoutForm.phone
       || (checkoutForm.paymentMethod === 'pago_movil' && !checkoutForm.bankName)
       || !checkoutForm.referenceNumber
@@ -1442,6 +1445,7 @@ export default function App() {
       const orderForm = new FormData();
       orderForm.set('idempotencyKey', checkoutRequestKey.current ?? (checkoutRequestKey.current = crypto.randomUUID()));
       orderForm.set('email', checkoutForm.email);
+      orderForm.set('name', checkoutForm.name);
       orderForm.set('phone', checkoutForm.phone);
       orderForm.set('paymentMethod', checkoutForm.paymentMethod);
       orderForm.set('bankName', checkoutForm.paymentMethod === 'binance' ? 'Binance' : checkoutForm.bankName);
@@ -1475,6 +1479,7 @@ export default function App() {
           quantity: item.quantity,
           priceUsd: item.priceUsd,
         })),
+        name: checkoutForm.name,
         email: checkoutForm.email,
         submittedAt: Date.now(),
       };
@@ -1786,6 +1791,7 @@ export default function App() {
 
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 text-xs border-t border-slate-900">
                         <div>
+                          <p className="text-slate-400">Nombre: <strong className="text-white">{sale.customerName}</strong></p>
                           <p className="text-slate-400">Cliente: <strong className="text-white">{sale.customerEmail}</strong></p>
                           <p className="text-slate-400">WhatsApp: <strong className="text-white">{sale.phone}</strong></p>
                           <p className="text-slate-400">
@@ -2567,6 +2573,20 @@ export default function App() {
             <form onSubmit={handleProcessOrder} className="space-y-4">
               <div className="space-y-3 bg-slate-900/60 p-3.5 rounded-xl border border-slate-800">
                 <h3 className="text-xs font-bold text-purple-300 uppercase tracking-wider">1. Datos del Cliente</h3>
+                <div>
+                  <label className="block text-[11px] text-slate-300 mb-1">Nombre completo</label>
+                  <input
+                    type="text"
+                    required
+                    minLength={2}
+                    maxLength={120}
+                    autoComplete="name"
+                    placeholder="Tu nombre y apellido"
+                    value={checkoutForm.name}
+                    onChange={(e) => updateCheckoutForm('name', e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-xs text-white focus:border-purple-500 focus:outline-none"
+                  />
+                </div>
                 <div>
                   <label className="block text-[11px] text-slate-300 mb-1">Email (Recepción de Keys)</label>
                   <input 

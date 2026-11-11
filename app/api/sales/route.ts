@@ -39,6 +39,7 @@ function itemsMatch(stored: unknown, requested: SaleItem[]) {
 
 function isSameOrderRequest(rows: Array<Record<string, unknown>>, input: {
   email: string;
+  name: string;
   phone: string;
   bankName: string;
   method: string;
@@ -52,6 +53,7 @@ function isSameOrderRequest(rows: Array<Record<string, unknown>>, input: {
   if (typeof customerInfo !== 'object' || customerInfo === null || Array.isArray(customerInfo)) return false;
   const info = customerInfo as Record<string, unknown>;
   return info.email === input.email.toLowerCase()
+    && info.name === input.name
     && info.phone === input.phone
     && info.bank_name === input.bankName
     && Number(info.order_total) === input.total
@@ -85,6 +87,7 @@ export async function POST(request: Request) {
   }
 
   const email = form.get('email');
+  const name = form.get('name');
   const phone = form.get('phone');
   const method = form.get('paymentMethod');
   const bankName = form.get('bankName');
@@ -131,6 +134,7 @@ export async function POST(request: Request) {
 
   if (
     typeof email !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())
+    || typeof name !== 'string' || name.trim().length < 2 || name.trim().length > 120
     || typeof phone !== 'string' || !/^[+0-9()\-\s]{7,25}$/.test(phone.trim())
     || !paymentIsValid
     || typeof bankName !== 'string' || bankName.trim().length < 2 || bankName.trim().length > 100
@@ -147,6 +151,7 @@ export async function POST(request: Request) {
 
   const items = (rawItems as SaleItem[]).map((item) => ({ ...item, name: item.name.trim() }));
   const normalizedEmail = (email as string).trim().toLowerCase();
+  const normalizedName = (name as string).trim();
   const normalizedPhone = (phone as string).trim();
   const normalizedBankName = (bankName as string).trim();
   const normalizedReference = (reference as string).trim();
@@ -170,6 +175,7 @@ export async function POST(request: Request) {
     if (existing?.length) {
       if (!isSameOrderRequest(existing as Array<Record<string, unknown>>, {
         email: normalizedEmail,
+        name: normalizedName,
         phone: normalizedPhone,
         bankName: normalizedBankName,
         method: String(method),
@@ -216,6 +222,7 @@ export async function POST(request: Request) {
 
     const customerInfo = {
       email: normalizedEmail,
+      name: normalizedName,
       phone: normalizedPhone,
       bank_name: normalizedBankName,
       items,
@@ -256,6 +263,7 @@ export async function POST(request: Request) {
         if (concurrentError) throw concurrentError;
         if (concurrent?.length && isSameOrderRequest(concurrent as Array<Record<string, unknown>>, {
           email: normalizedEmail,
+          name: normalizedName,
           phone: normalizedPhone,
           bankName: normalizedBankName,
           method: String(method),
