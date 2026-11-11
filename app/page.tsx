@@ -957,30 +957,6 @@ export default function App() {
   useEffect(() => {
     let active = true;
     let unsubscribe = () => {};
-    const restoreCheckoutDraft = (email: string | undefined) => {
-      if (!email) return;
-      try {
-        const savedDraft = window.sessionStorage.getItem('lacasitagamer:checkout-draft');
-        if (!savedDraft) return;
-        const draft = JSON.parse(savedDraft);
-        if (
-          !draft
-          || typeof draft !== 'object'
-          || !draft.checkoutForm
-          || String(draft.checkoutForm.email).toLowerCase() !== email.toLowerCase()
-          || !Array.isArray(draft.cart)
-        ) return;
-
-        setCart(draft.cart);
-        setCheckoutForm(draft.checkoutForm);
-        setUsePointsInCheckout(Boolean(draft.usePointsInCheckout));
-        setIsCheckoutOpen(true);
-        setCheckoutError('Correo verificado. Revisa tus datos y vuelve a adjuntar el comprobante si pagaste con Binance.');
-        window.sessionStorage.removeItem('lacasitagamer:checkout-draft');
-      } catch (error) {
-        console.error('No se pudo restaurar el checkout después de verificar el correo.', error);
-      }
-    };
 
     try {
       const supabase = getSupabaseBrowserClient();
@@ -991,7 +967,6 @@ export default function App() {
         }
         if (active) {
           setCustomerAuthEmail(data.session?.user.email ?? null);
-          restoreCheckoutDraft(data.session?.user.email);
         }
         if (active && new URLSearchParams(window.location.search).get('tab') === 'admin') {
           if (isAdminUser(data.session?.user)) {
@@ -1008,7 +983,6 @@ export default function App() {
       const { data } = supabase.auth.onAuthStateChange((_event, session) => {
         if (!active) return;
         setCustomerAuthEmail(session?.user.email ?? null);
-        restoreCheckoutDraft(session?.user.email);
         const isAdmin = isAdminUser(session?.user);
         setIsAdminAuthenticated(Boolean(isAdmin));
         if (!isAdmin && activeTab === 'admin') setActiveTab('home');
@@ -1469,25 +1443,6 @@ export default function App() {
 
     setIsProcessingOrder(true);
     try {
-      const supabase = getSupabaseBrowserClient();
-      const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
-      if (sessionError) throw sessionError;
-      const sessionEmail = sessionData.session?.user.email;
-      if (!sessionData.session || sessionEmail?.toLowerCase() !== checkoutForm.email.trim().toLowerCase()) {
-        window.sessionStorage.setItem('lacasitagamer:checkout-draft', JSON.stringify({
-          checkoutForm,
-          cart,
-          usePointsInCheckout,
-        }));
-        const { error: magicLinkError } = await supabase.auth.signInWithOtp({
-          email: checkoutForm.email.trim(),
-          options: { emailRedirectTo: `${window.location.origin}/?checkout=1` },
-        });
-        if (magicLinkError) throw magicLinkError;
-        setCheckoutError('Te enviamos un enlace de acceso. Verifica tu correo y vuelve para registrar el pedido.');
-        return;
-      }
-
       let checkoutBcvRate = bcvRate;
       if (checkoutBcvRate === null) {
         const response = await fetch('/api/bcv-rate', { cache: 'no-store' });
@@ -1529,11 +1484,9 @@ export default function App() {
       }))));
       if (paymentProofFile) orderForm.set('paymentProof', paymentProofFile);
 
-      const accessToken = sessionData.session.access_token;
       const response = await fetch('/api/sales', {
         method: 'POST',
         cache: 'no-store',
-        headers: { Authorization: ['Bear' + 'er', accessToken].join(' ') },
         body: orderForm,
       });
       const result = await response.json();
@@ -1558,8 +1511,23 @@ export default function App() {
       } catch (storageError) {
         console.error('No se pudo guardar el resumen local de confirmación.', storageError);
       }
+      if (customerAuthEmail?.toLowerCase() !== checkoutForm.email.trim().toLowerCase()) {
+        try {
+          void getSupabaseBrowserClient().auth.signInWithOtp({
+            email: checkoutForm.email.trim(),
+            options: {
+              emailRedirectTo: `${window.location.origin}/checkout/success?orderId=${encodeURIComponent(result.orderId)}`,
+            },
+          }).then(({ error }) => {
+            if (error) console.error('El pedido se guardó, pero no se pudo enviar el enlace de acceso.', error);
+          }).catch((error) => {
+            console.error('El pedido se guardó, pero no se pudo enviar el enlace de acceso.', error);
+          });
+        } catch (error) {
+          console.error('El pedido se guardó, pero no se pudo iniciar el envío del enlace de acceso.', error);
+        }
+      }
       checkoutRequestKey.current = null;
-      window.sessionStorage.removeItem('lacasitagamer:checkout-draft');
       setCart([]);
       setUsePointsInCheckout(false);
       setPaymentProofFile(null);
