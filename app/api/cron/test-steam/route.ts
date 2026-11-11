@@ -43,20 +43,6 @@ type SupplierCheck = {
   checked_at: string;
 };
 
-type ProductSyncResult = {
-  success: boolean;
-  variant_id: string;
-  product_id: string;
-  provider: 'Eneba';
-  best_price_usd: number | null;
-  profit_margin_percent: number | null;
-  final_price_usd: number | null;
-  final_price_bs: number | null;
-  seller_name: string | null;
-  offer_url: string | null;
-  error?: string;
-};
-
 type CatalogSyncProduct = {
   variant_id: string;
   product_id: string;
@@ -159,90 +145,82 @@ async function resolveBcvRate() {
   return fetchMontosveRate(process.env.MONTOSVE_API_KEY || '');
 }
 
-async function syncEnebaProducts(
-  supabase: ReturnType<typeof getSupabaseServerClient> | null,
-  bcvRate: number,
-  steamOffer: SupplierCheck | null,
+async function checkSteamSuppliers(
+  supabase: ReturnType<typeof getSupabaseServerClient>,
   checkedAt: string
-): Promise<ProductSyncResult[]> {
-  if (!supabase) return [];
+): Promise<{ checks: SupplierCheck[]; warnings: string[] }> {
+  const warnings: string[] = [];
+  let suppliers = FALLBACK_SUPPLIERS;
 
-  const { data: pricingRows, error: pricingError } = await supabase
-    .from('product_pricing')
-    .select('variant_id, product_id');
-  if (pricingError) throw pricingError;
+  try {
+    const { data, error } = await supabase
+      .from('product_supplier_urls')
+      .select('supplier, url')
+      .eq('variant_id', VARIANT_ID)
+      .in('supplier', ['eneba', 'g2a']);
+    if (error) throw error;
 
-  const { data: enebaRows, error: enebaError } = await supabase
-    .from('product_supplier_urls')
-    .select('variant_id, url')
-    .eq('supplier', 'eneba');
-  if (enebaError) throw enebaError;
+    const configuredSuppliers = (data ?? []) as SupplierRow[];
+    const supplierByName = new Map(configuredSuppliers.map((supplier) => [supplier.supplier, supplier]));
+    suppliers = FALLBACK_SUPPLIERS.map((fallback) => supplierByName.get(fallback.supplier) ?? fallback);
+  } catch (error) {
+    warnings.push(`No se pudo leer la configuración de ofertas Steam; se usarán URLs de respaldo: ${getErrorMessage(error, 'error desconocido')}`);
+    console.warn('[cron/test-steam][supplier-config] Se usarán URLs de respaldo:', error);
+  }
 
-  const enebaUrls = new Map((enebaRows ?? [])
-    .filter((row) => typeof row.url === 'string' && row.url.trim().length > 0)
-    .map((row) => [row.variant_id, row.url]));
-  const configuredProducts = (pricingRows ?? []).filter((product) => enebaUrls.has(product.variant_id));
-  const results = await Promise.all(configuredProducts.map(async (product): Promise<ProductSyncResult> => {
-    const url = enebaUrls.get(product.variant_id);
-    const result: ProductSyncResult = {
-      success: false,
-      variant_id: product.variant_id,
-      product_id: product.product_id,
-      provider: 'Eneba',
-      best_price_usd: null,
-      profit_margin_percent: null,
-      final_price_usd: null,
-      final_price_bs: null,
-      seller_name: null,
-      offer_url: null,
-    };
-
+  const checks = await Promise.all(suppliers.map(async (supplier): Promise<SupplierCheck> => {
     try {
-      const hasCachedSteamOffer = product.variant_id === VARIANT_ID && steamOffer?.price_usd != null;
-      const offer = hasCachedSteamOffer && steamOffer
-        ? {
-          priceUsd: steamOffer.price_usd,
-          sellerName: steamOffer.seller_name,
-          offerUrl: steamOffer.offer_url ?? url,
-        }
-        : await fetchSupplierOffer({ supplier: 'eneba', url });
-      const { marginPercent, finalPriceUsd } = calculateTieredPrice(offer.priceUsd);
-      const finalPriceBs = calculatePriceBs(finalPriceUsd, bcvRate);
-      Object.assign(result, {
-        success: true,
-        best_price_usd: offer.priceUsd,
-        profit_margin_percent: marginPercent,
-        final_price_usd: finalPriceUsd,
-        final_price_bs: finalPriceBs,
+      const offer = await fetchSupplierOffer(supplier);
+      return {
+        variant_id: VARIANT_ID,
+        supplier: supplier.supplier,
+        source_url: supplier.url,
+        price_usd: offer.priceUsd,
+        final_price_usd: calculateTieredPrice(offer.priceUsd).finalPriceUsd,
         seller_name: offer.sellerName,
         offer_url: offer.offerUrl,
-      });
-
-      if (!hasCachedSteamOffer) {
-        const { error: checkError } = await supabase
-          .from('supplier_price_checks')
-          .insert({
-            variant_id: product.variant_id,
-            supplier: 'eneba',
-            source_url: url,
-            price_usd: offer.priceUsd,
-            final_price_usd: finalPriceUsd,
-            seller_name: offer.sellerName,
-            offer_url: offer.offerUrl,
-            error: null,
-            checked_at: checkedAt,
-          });
-        if (checkError) throw checkError;
-      }
-
+        error: null,
+        checked_at: checkedAt,
+      };
     } catch (error) {
-      result.success = false;
-      result.error = getErrorMessage(error, 'No se pudo sincronizar el precio.');
-      console.error(`[cron/test-steam][product:${product.variant_id}] No se pudo sincronizar:`, error);
+      const message = getErrorMessage(error, 'Error desconocido consultando al proveedor.');
+      warnings.push(`${PROVIDER_NAMES[supplier.supplier]}: ${message}`);
+      console.warn(`[cron/test-steam][supplier:${supplier.supplier}] Falló la prueba secundaria:`, error);
+      return {
+        variant_id: VARIANT_ID,
+        supplier: supplier.supplier,
+        source_url: supplier.url,
+        price_usd: null,
+        final_price_usd: null,
+        seller_name: null,
+        offer_url: null,
+        error: message,
+        checked_at: checkedAt,
+      };
     }
-    return result;
   }));
-  return results;
+
+  try {
+    const { error } = await supabase
+      .from('supplier_price_checks')
+      .insert(checks.map((check) => ({
+        variant_id: check.variant_id,
+        supplier: check.supplier,
+        source_url: check.source_url,
+        price_usd: check.price_usd,
+        final_price_usd: check.final_price_usd,
+        seller_name: check.seller_name,
+        offer_url: check.offer_url,
+        error: check.error,
+        checked_at: check.checked_at,
+      })));
+    if (error) throw error;
+  } catch (error) {
+    warnings.push(`No se pudo guardar el historial de prueba Steam: ${getErrorMessage(error, 'error desconocido')}`);
+    console.warn('[cron/test-steam][offer-save] No se guardó el historial de la prueba secundaria:', error);
+  }
+
+  return { checks, warnings };
 }
 
 export async function GET(request: Request) {
@@ -259,66 +237,11 @@ export async function GET(request: Request) {
   }
 
   let bcvRate: number | null = null;
-  const errors: string[] = [];
   const warnings: string[] = [];
 
   try {
-    let supabase: ReturnType<typeof getSupabaseServerClient> | null = null;
-    let suppliers: SupplierRow[] = FALLBACK_SUPPLIERS;
-    let shouldPersistSupplierFallback = false;
-    try {
-      supabase = getSupabaseServerClient();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'No se pudo inicializar Supabase.';
-      errors.push(`Supabase cliente: ${message}`);
-      console.error('[cron/test-steam][supabase-client] No se pudo inicializar Supabase:', error);
-    }
-
-    if (supabase) {
-      try {
-        const { data, error: suppliersError } = await supabase
-          .from('product_supplier_urls')
-          .select('supplier, url')
-          .eq('variant_id', VARIANT_ID)
-          .in('supplier', ['eneba', 'g2a']);
-
-        if (suppliersError) throw suppliersError;
-
-        const configuredSuppliers = (data ?? []) as SupplierRow[];
-        const supplierByName = new Map(configuredSuppliers.map((supplier) => [supplier.supplier, supplier]));
-        suppliers = FALLBACK_SUPPLIERS.map((fallback) => supplierByName.get(fallback.supplier) ?? fallback);
-        shouldPersistSupplierFallback = configuredSuppliers.length < FALLBACK_SUPPLIERS.length;
-
-        if (configuredSuppliers.length === 0) {
-          warnings.push(`No hay URLs configuradas para ${VARIANT_ID}; se usarán las URLs de respaldo.`);
-          console.warn(`[cron/test-steam][supplier-config] Sin filas para ${VARIANT_ID}; usando URLs Eneba/G2A de respaldo.`);
-        } else if (configuredSuppliers.length < FALLBACK_SUPPLIERS.length) {
-          warnings.push('La configuración de proveedores estaba incompleta; se completó con URLs de respaldo.');
-          console.warn('[cron/test-steam][supplier-config] Faltaban proveedores configurados; se completará la lista.');
-        }
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'No se pudieron leer ni guardar las URLs.';
-        console.error('[cron/test-steam][supplier-config] Falló la consulta o persistencia de URLs:', error);
-        warnings.push(`No se pudieron leer las URLs de Supabase (${message}); se usarán URLs de respaldo.`);
-        suppliers = FALLBACK_SUPPLIERS;
-        shouldPersistSupplierFallback = true;
-      }
-
-      if (shouldPersistSupplierFallback) {
-        try {
-          const { error: defaultsError } = await supabase
-            .from('product_supplier_urls')
-            .upsert(suppliers, { onConflict: 'variant_id,supplier' });
-          if (defaultsError) throw defaultsError;
-        } catch (error) {
-          const message = error instanceof Error ? error.message : 'No se pudieron guardar las URLs de respaldo.';
-          errors.push(`Persistencia de URLs de respaldo: ${message}`);
-          console.error('[cron/test-steam][supplier-config-save] No se pudieron persistir las URLs de respaldo:', error);
-        }
-      }
-    }
-
     const checkedAt = new Date().toISOString();
+    const supabase = getSupabaseServerClient();
     try {
       bcvRate = await resolveBcvRate();
     } catch (error) {
@@ -335,60 +258,22 @@ export async function GET(request: Request) {
       });
     }
 
-    const results = await Promise.all(suppliers.map(async (supplier): Promise<SupplierCheck> => {
-        try {
-          const offer = await fetchSupplierOffer(supplier);
-          return {
-            variant_id: VARIANT_ID,
-            supplier: supplier.supplier,
-            source_url: supplier.url,
-            price_usd: offer.priceUsd,
-            final_price_usd: calculateTieredPrice(offer.priceUsd).finalPriceUsd,
-            seller_name: offer.sellerName,
-            offer_url: offer.offerUrl,
-            error: null,
-            checked_at: checkedAt,
-          };
-        } catch (error) {
-          const message = error instanceof Error ? error.message : 'Error desconocido consultando al proveedor.';
-          console.error(`[cron/test-steam][supplier:${supplier.supplier}] Falló la extracción de oferta:`, error);
-          return {
-            variant_id: VARIANT_ID,
-            supplier: supplier.supplier,
-            source_url: supplier.url,
-            price_usd: null,
-            final_price_usd: null,
-            seller_name: null,
-            offer_url: null,
-            error: message,
-            checked_at: checkedAt,
-          };
-        }
-      }));
+    const { data: syncData, error: syncError } = await supabase.rpc('sync_exchange_rate_and_recalculate_catalog', {
+      p_bcv_rate: bcvRate,
+      p_updated_at: checkedAt,
+      p_supplier_prices: [],
+    });
+    if (syncError) throw syncError;
+    const syncSummary = parseCatalogSyncSummary(syncData);
 
-    if (supabase && results.length > 0) {
-      try {
-        const { error: saveError } = await supabase
-          .from('supplier_price_checks')
-          .insert(
-            results.map((result) => ({
-              variant_id: result.variant_id,
-              supplier: result.supplier,
-              source_url: result.source_url,
-              price_usd: result.price_usd,
-              final_price_usd: result.final_price_usd,
-              seller_name: result.seller_name,
-              offer_url: result.offer_url,
-              error: result.error,
-              checked_at: result.checked_at,
-            }))
-          );
-        if (saveError) throw saveError;
-      } catch (error) {
-        const message = getErrorMessage(error, 'No se pudieron guardar los precios.');
-        errors.push(`Guardado de ofertas: ${message}`);
-        console.error('[cron/test-steam][offer-save] Falló la inserción en supplier_price_checks:', error);
-      }
+    let results: SupplierCheck[] = [];
+    try {
+      const secondaryResult = await checkSteamSuppliers(supabase, checkedAt);
+      warnings.push(...secondaryResult.warnings);
+      results = secondaryResult.checks;
+    } catch (error) {
+      warnings.push(`Falló la prueba secundaria de Steam: ${getErrorMessage(error, 'error desconocido')}`);
+      console.warn('[cron/test-steam][secondary-check] Falló la prueba secundaria:', error);
     }
 
     const best = results.find((result) => result.supplier === 'eneba' && result.price_usd !== null) ?? null;
@@ -396,8 +281,8 @@ export async function GET(request: Request) {
       && FALLBACK_SUPPLIERS.every((supplier) => results.some((result) => result.supplier === supplier.supplier && result.price_usd !== null));
 
     if (!comparisonComplete) {
-      warnings.push('Comparación Eneba/G2A incompleta; el precio de producto se calculará únicamente desde Eneba.');
-      console.warn('[cron/test-steam][comparison] Comparación incompleta; el precio sincronizado usará Eneba.');
+      warnings.push('La prueba de ofertas Steam quedó incompleta; el recálculo atómico del catálogo ya se completó.');
+      console.warn('[cron/test-steam][comparison] La prueba secundaria no completó la comparación de ofertas.');
     }
 
     let finalPriceUsd: number | null = null;
@@ -420,44 +305,15 @@ export async function GET(request: Request) {
       console.error('[cron/test-steam][calculation] Sin comparación completa; no se calcula el precio final.');
     }
 
-    const fetchedProducts = await syncEnebaProducts(
-      supabase,
-      bcvRate,
-      results.find((result) => result.supplier === 'eneba') ?? null,
-      checkedAt
-    );
-    for (const product of fetchedProducts) {
-      if (!product.success) {
-        errors.push(`${product.variant_id}: ${product.error ?? 'No se pudo actualizar.'}`);
-      }
-    }
-
-    if (!supabase) {
-      throw new Error('Supabase no está disponible; no se modificó la tasa ni el catálogo.');
-    }
-
-    const { data: syncData, error: syncError } = await supabase.rpc('sync_catalog_prices_with_bcv', {
-      p_bcv_rate: bcvRate,
-      p_updated_at: checkedAt,
-      p_supplier_prices: fetchedProducts
-        .filter((product) => product.success && product.best_price_usd !== null)
-        .map((product) => ({
-          variant_id: product.variant_id,
-          cost_usd: product.best_price_usd,
-          supplier: 'eneba',
-          seller_name: product.seller_name,
-          offer_url: product.offer_url,
-        })),
-    });
-    if (syncError) throw syncError;
-    const syncSummary = parseCatalogSyncSummary(syncData);
-
     return jsonResponse({
-      success: syncSummary.products_updated > 0,
+      success: true,
       bcv_rate: bcvRate,
       source: 'monedasve_api',
       timestamp: checkedAt,
       bcv_rate_persisted: true,
+      catalog_recalculated: true,
+      catalog_products_updated: syncSummary.products_updated,
+      catalog_products: syncSummary.products,
       product: PRODUCT_NAME,
       best_price_usd: best?.price_usd ?? null,
       provider: best
@@ -469,12 +325,6 @@ export async function GET(request: Request) {
       final_price_bs: finalPriceBs,
       products_updated: syncSummary.products_updated,
       products: syncSummary.products,
-      failed_supplier_checks: fetchedProducts
-        .filter((product) => !product.success)
-        .map((product) => ({
-          variant_id: product.variant_id,
-          error: product.error,
-        })),
       comparisons: results.map((result) => ({
         provider: PROVIDER_NAMES[result.supplier],
         price_usd: result.price_usd,
@@ -485,7 +335,6 @@ export async function GET(request: Request) {
         ...(result.error ? { error: result.error } : {}),
       })),
       ...(warnings.length > 0 ? { warnings } : {}),
-      ...(errors.length > 0 ? { errors } : {}),
     });
   } catch (error) {
     console.error('Error al probar precios de Steam Gift Card $10:', error);
