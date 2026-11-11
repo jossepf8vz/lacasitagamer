@@ -629,6 +629,8 @@ type OrderItem = {
   gameId: string;
   priceUsd: number;
   quantity: number;
+  status?: string;
+  deliveredKey?: string;
 };
 
 type AdminOrder = {
@@ -764,6 +766,7 @@ export default function App() {
   const [adminTab, setAdminTab] = useState('sales'); // 'sales' | 'analytics'
   const [adminOrdersLoading, setAdminOrdersLoading] = useState(false);
   const [adminOrdersError, setAdminOrdersError] = useState<string | null>(null);
+  const [dispatchKeyDrafts, setDispatchKeyDrafts] = useState<Record<string, string>>({});
   const [selectedSupplierVariantId, setSelectedSupplierVariantId] = useState(MOCK_GAMES[0].variants[0].id);
   const [supplierComparison, setSupplierComparison] = useState<SupplierComparisonResult | null>(null);
   const [supplierComparisonError, setSupplierComparisonError] = useState<string | null>(null);
@@ -1521,6 +1524,49 @@ export default function App() {
     }
   };
 
+  const dispatchSaleItemAdmin = async (order: AdminOrder, item: OrderItem) => {
+    const draftKey = `${order.databaseId}:${item.variantId}`;
+    const deliveredKey = dispatchKeyDrafts[draftKey]?.trim();
+    if (!deliveredKey) {
+      setAdminOrdersError(`Escribe la clave para despachar ${item.name}.`);
+      return;
+    }
+
+    try {
+      const { data, error } = await getSupabaseBrowserClient().auth.getSession();
+      if (error) throw error;
+      const accessToken = data.session?.access_token;
+      if (!accessToken) throw new Error('La sesión de administrador expiró.');
+
+      const response = await fetch('/api/admin/orders', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: ['Bear' + 'er', accessToken].join(' '),
+        },
+        body: JSON.stringify({
+          id: order.databaseId,
+          variantId: item.variantId,
+          status: 'completado',
+          deliveredKey,
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error ?? 'No se pudo despachar el producto.');
+      setAdminSalesHistory((previous) => previous.map((entry) => entry.databaseId === order.databaseId ? result.order : entry));
+      setDispatchKeyDrafts((previous) => {
+        const next = { ...previous };
+        delete next[draftKey];
+        return next;
+      });
+      setAdminOrdersError(result.realtimeNotified === false
+        ? 'La clave se guardó, pero no se pudo enviar la notificación en tiempo real al cliente.'
+        : null);
+    } catch (error) {
+      setAdminOrdersError(error instanceof Error ? error.message : 'No se pudo despachar el producto.');
+    }
+  };
+
   const filteredProducts = useMemo(() => {
     return STORE_CATALOG.filter(game => {
       const matchesCategory = selectedCategory === 'Todos' || game.category === selectedCategory;
@@ -1733,7 +1779,7 @@ export default function App() {
                           <span className="font-mono font-bold text-purple-400">{sale.id}</span>
                           <span className="text-slate-400 ml-2">({sale.date})</span>
                         </div>
-                        <span className={`px-2 py-0.5 rounded font-bold ${sale.status === 'Aprobado' ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-amber-500/20 text-amber-400 border border-amber-500/30'}`}>
+                        <span className={`px-2 py-0.5 rounded font-bold ${sale.status === 'Completado' ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30' : sale.status === 'Pago verificado' ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-amber-500/20 text-amber-400 border border-amber-500/30'}`}>
                           {sale.status}
                         </span>
                       </div>
@@ -1819,13 +1865,44 @@ export default function App() {
                                     ))
                                     : <p className="self-center text-[11px] text-slate-500">Sin precios de proveedores registrados para esta variante.</p>}
                                 </div>
+                                {item.status === 'completado' ? (
+                                  <div className="rounded-lg border border-cyan-500/30 bg-cyan-950/20 p-3">
+                                    <p className="text-[10px] font-bold uppercase tracking-wide text-cyan-300">Producto despachado</p>
+                                    <p className="mt-1 break-all font-mono text-xs text-white">{item.deliveredKey}</p>
+                                  </div>
+                                ) : item.status === 'aprobado' ? (
+                                  <div className="flex flex-col gap-2 sm:flex-row">
+                                    <textarea
+                                      aria-label={`Clave de ${item.name}`}
+                                      rows={2}
+                                      maxLength={1000}
+                                      value={dispatchKeyDrafts[`${sale.databaseId}:${item.variantId}`] ?? ''}
+                                      onChange={(event) => {
+                                        const key = `${sale.databaseId}:${item.variantId}`;
+                                        setDispatchKeyDrafts((previous) => ({ ...previous, [key]: event.target.value }));
+                                      }}
+                                      placeholder="Pega aquí la clave del producto"
+                                      className="min-h-12 flex-1 resize-y rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-mono text-white placeholder:text-slate-500 focus:border-cyan-500 focus:outline-none"
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={() => void dispatchSaleItemAdmin(sale, item)}
+                                      disabled={!dispatchKeyDrafts[`${sale.databaseId}:${item.variantId}`]?.trim()}
+                                      className="rounded-lg bg-cyan-600 px-4 py-2 text-xs font-bold text-white transition hover:bg-cyan-500 disabled:cursor-not-allowed disabled:opacity-50"
+                                    >
+                                      Enviar clave / Despachar
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <p className="text-[10px] text-amber-300">Verifica el pago para habilitar el despacho de la clave.</p>
+                                )}
                               </div>
                             </div>
                           );
                         })}
                       </div>
 
-                      {sale.status !== 'Aprobado' && (
+                      {sale.status === 'Pendiente' && (
                         <button 
                           onClick={() => void approveSaleAdmin(sale)}
                           className="mt-2 w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-1.5 rounded-lg text-xs transition"
