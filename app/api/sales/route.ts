@@ -183,7 +183,7 @@ export async function POST(request: Request) {
         items,
         total,
       })) {
-        return NextResponse.json({ error: 'La clave del pedido ya fue utilizada para otra solicitud.' }, { status: 409, headers: noStoreHeaders });
+        return NextResponse.json({ error: 'El identificador del pedido ya fue utilizado para otra solicitud.' }, { status: 409, headers: noStoreHeaders });
       }
       return NextResponse.json({ orderId }, { headers: noStoreHeaders });
     }
@@ -285,7 +285,7 @@ export async function POST(request: Request) {
     }
     console.error('[api/sales] No se pudo insertar el pedido en sales.', error);
     return NextResponse.json(
-      { error: 'No se pudo registrar el pedido. No se generó ninguna clave; verifica los datos e intenta de nuevo.' },
+      { error: 'No se pudo registrar el pedido. Verifica los datos e intenta de nuevo.' },
       { status: 500, headers: noStoreHeaders }
     );
   }

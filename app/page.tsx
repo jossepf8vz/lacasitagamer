@@ -1497,7 +1497,7 @@ export default function App() {
     } catch (error) {
       const message = error instanceof Error
         ? error.message
-        : 'No se pudo registrar el pedido. No se generó ningún producto.';
+        : 'No se pudo registrar el pedido. Verifica tus datos e intenta de nuevo.';
       setCheckoutError(message);
       window.alert(`No se pudo procesar el pago: ${message}`);
     } finally {

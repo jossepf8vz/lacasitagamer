@@ -340,6 +340,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ order: orderResponse(createdOrder) }, { status: 201, headers: noStoreHeaders });
   } catch (error) {
     console.error('[api/orders] No se pudo registrar el pedido.', error);
-    return NextResponse.json({ error: 'No se pudo registrar el pedido. No se generó ningún producto; intenta de nuevo.' }, { status: 500, headers: noStoreHeaders });
+    return NextResponse.json({ error: 'No se pudo registrar el pedido. Verifica los datos e intenta de nuevo.' }, { status: 500, headers: noStoreHeaders });
   }
 }
