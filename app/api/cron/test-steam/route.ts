@@ -86,18 +86,29 @@ function getErrorMessage(error: unknown, fallback: string): string {
 }
 
 function parseBcvUsdRate(html: string): number | null {
-  const dollarBlock = html.match(/<div\b[^>]*id=["']dolar["'][^>]*>([\s\S]{0,5000})/i)?.[1] ?? html;
-  const usdIndex = dollarBlock.search(/\bUSD\b/i);
-  if (usdIndex < 0) return null;
+  const dollarContainer = html.match(/<[^>]+\bid\s*=\s*["']dolar["'][^>]*>/i);
+  if (!dollarContainer || dollarContainer.index === undefined) return null;
 
-  const usdSection = dollarBlock.slice(usdIndex, usdIndex + 1200);
-  const rateMatch = usdSection.match(/<strong\b[^>]*>\s*([\d.,]+)\s*<\/strong>/i)
-    ?? usdSection.match(/>\s*([\d.]{1,12},\d{2,})\s*</);
-  if (!rateMatch) return null;
+  const contentStart = dollarContainer.index + dollarContainer[0].length;
+  const dollarSection = html.slice(contentStart, contentStart + 5000);
+  const strongValues = Array.from(dollarSection.matchAll(/<strong\b[^>]*>([\s\S]*?)<\/strong>/gi));
 
-  const normalized = rateMatch[1].replace(/\./g, '').replace(',', '.');
-  const rate = Number(normalized);
-  return Number.isFinite(rate) && rate > 0 ? rate : null;
+  for (const strongValue of strongValues) {
+    const text = strongValue[1]
+      .replace(/<[^>]*>/g, ' ')
+      .replace(/&nbsp;|&#160;|&#xA0;/gi, ' ')
+      .trim();
+    const valueMatch = text.match(/\d[\d\s.,]*/);
+    if (!valueMatch) continue;
+
+    const value = valueMatch[0].replace(/\s/g, '');
+    const normalized = value.includes(',')
+      ? value.replace(/\./g, '').replace(',', '.')
+      : value;
+    const rate = Number.parseFloat(normalized);
+    if (Number.isFinite(rate) && rate >= 1 && rate <= 10000) return rate;
+  }
+  return null;
 }
 
 async function fetchBcvOfficialRate() {
@@ -108,7 +119,9 @@ async function fetchBcvOfficialRate() {
       cache: 'no-store',
       headers: {
         Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        'Cache-Control': 'no-store',
+        Pragma: 'no-store',
       },
       signal: controller.signal,
     });
@@ -174,8 +187,11 @@ async function syncEnebaProducts(
     .eq('supplier', 'eneba');
   if (enebaError) throw enebaError;
 
-  const enebaUrls = new Map((enebaRows ?? []).map((row) => [row.variant_id, row.url]));
-  const results = await Promise.all((pricingRows ?? []).map(async (product): Promise<ProductSyncResult> => {
+  const enebaUrls = new Map((enebaRows ?? [])
+    .filter((row) => typeof row.url === 'string' && row.url.trim().length > 0)
+    .map((row) => [row.variant_id, row.url]));
+  const configuredProducts = (pricingRows ?? []).filter((product) => enebaUrls.has(product.variant_id));
+  const results = await Promise.all(configuredProducts.map(async (product): Promise<ProductSyncResult> => {
     const url = enebaUrls.get(product.variant_id);
     const result: ProductSyncResult = {
       success: false,
@@ -189,11 +205,6 @@ async function syncEnebaProducts(
       seller_name: null,
       offer_url: null,
     };
-
-    if (!url) {
-      result.error = 'No hay una URL de Eneba configurada para esta variante.';
-      return result;
-    }
 
     try {
       const hasCachedSteamOffer = product.variant_id === VARIANT_ID && steamOffer?.price_usd != null;
@@ -477,7 +488,8 @@ export async function GET(request: Request) {
       profit_margin_percent: profitMarginPercent,
       final_price_usd: finalPriceUsd,
       final_price_bs: finalPriceBs,
-      products_updated: products.filter((product) => product.success).map((product) => ({
+      products_updated: products.filter((product) => product.success).length,
+      products: products.filter((product) => product.success).map((product) => ({
         variant_id: product.variant_id,
         product_id: product.product_id,
         best_price_usd: product.best_price_usd,
@@ -485,7 +497,7 @@ export async function GET(request: Request) {
         final_price_usd: product.final_price_usd,
         final_price_bs: product.final_price_bs,
       })),
-      products,
+      failed_products: products.filter((product) => !product.success),
       comparisons: results.map((result) => ({
         provider: PROVIDER_NAMES[result.supplier],
         price_usd: result.price_usd,
