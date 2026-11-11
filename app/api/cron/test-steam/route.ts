@@ -421,6 +421,7 @@ export async function GET(request: Request) {
 
     return jsonResponse({
       success: bcvRate !== null
+        && !bcvRateIsStale
         && rateResult.persisted
         && products.length > 0
         && products.every((product) => product.success),

@@ -1,6 +1,6 @@
 import { getSupabaseServerClient } from '../supabase/server';
 
-const MONTOSVE_RATES_URL = 'https://api.monedasve.com/v1/tasas/actual';
+const MONTOSVE_RATES_URL = 'https://api.montosve.com/v1/fx/rates';
 const BCV_RATE_SOURCE = 'bcv_official_ves';
 const SOURCE_TIMEOUT_MS = 6000;
 const BCV_RATE_CACHE_SECONDS = 12 * 60 * 60;
@@ -188,6 +188,10 @@ export async function getStoredBcvRate(): Promise<StoredRate | null> {
 }
 
 export async function fetchMontosveRate(apiKey: string) {
+  if (!apiKey) {
+    throw new Error('Falta configurar MONTOSVE_API_KEY.');
+  }
+
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), SOURCE_TIMEOUT_MS);
 
@@ -197,11 +201,11 @@ export async function fetchMontosveRate(apiKey: string) {
       headers: {
         Accept: 'application/json',
         'X-API-Key': apiKey,
+        'Cache-Control': 'no-store',
       },
       signal: controller.signal,
     });
     const rawText = await response.text();
-    console.log('MontosVE Raw Response:', rawText);
 
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
@@ -228,14 +232,22 @@ function extractMontosveBcvRate(payload: unknown): number | null {
   const root = asRecord(payload);
   if (root?.success === false || root?.ok === false) return null;
 
-  const current = asRecord(root?.current);
-  const rawUsdRate = current?.usd;
-  const rawValue = String(rawUsdRate ?? '').trim().replace(/\s/g, '');
-  const normalizedValue = rawValue.includes(',')
-    ? rawValue.replace(/\./g, '').replace(',', '.')
-    : rawValue;
-  const parsedRate = Number.parseFloat(normalizedValue);
-  return Number.isFinite(parsedRate) && parsedRate > 0 ? parsedRate : null;
+  const rates = Array.isArray(root?.data) ? root.data : [];
+  const bcvUsdRate = rates.find((entry) => {
+    const rate = asRecord(entry);
+    return rate?.market === 'bcv'
+      && typeof rate.currency_pair === 'string'
+      && rate.currency_pair.toUpperCase() === 'USD/VES';
+  });
+  const rawRate = asRecord(bcvUsdRate)?.rate;
+  const parsedRate = typeof rawRate === 'number'
+    ? rawRate
+    : typeof rawRate === 'string'
+      ? Number(rawRate.trim().replace(',', '.'))
+      : NaN;
+  return Number.isFinite(parsedRate) && parsedRate >= 1 && parsedRate <= 10000
+    ? parsedRate
+    : null;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
