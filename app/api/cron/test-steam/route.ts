@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { fetchMontosveRate, getStoredBcvRate } from '../../../../lib/pricing/bcv';
+import { fetchMontosveRate } from '../../../../lib/pricing/bcv';
 import { fetchSupplierOffer, type SupplierName } from '../../../../lib/pricing/suppliers';
 import { getSupabaseServerClient } from '../../../../lib/supabase/server';
 
@@ -57,6 +57,23 @@ type ProductSyncResult = {
   error?: string;
 };
 
+type CatalogSyncProduct = {
+  variant_id: string;
+  product_id: string;
+  best_price_usd: number;
+  profit_margin_percent: number;
+  final_price_usd: number;
+  final_price_bs: number;
+};
+
+type CatalogSyncSummary = {
+  success: true;
+  bcv_rate: number;
+  updated_at: string;
+  products_updated: number;
+  products: CatalogSyncProduct[];
+};
+
 function calculateTieredPrice(basePriceUsd: number) {
   const marginPercent = basePriceUsd < 20 ? 33 : basePriceUsd < 50 ? 20 : 8;
   const serviceBufferUsd = basePriceUsd < 20 ? 0.4 : 0;
@@ -83,38 +100,63 @@ function getErrorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
-async function resolveBcvRate(supabase: ReturnType<typeof getSupabaseServerClient> | null) {
-  try {
-    const rate = await fetchMontosveRate(process.env.MONTOSVE_API_KEY || '');
-    let warning: string | null = null;
-    if (supabase) {
-      try {
-        const { error } = await supabase
-          .from('exchange_rates')
-          .upsert(
-            { currency: 'USD', rate, updated_at: new Date().toISOString() },
-            { onConflict: 'currency' }
-          );
-        if (error) throw error;
-      } catch (error) {
-        warning = `La tasa de MontosVE se obtuvo, pero no se pudo guardar en exchange_rates: ${getErrorMessage(error, 'error desconocido')}`;
-        console.error('[cron/test-steam][bcv-save] Falló el upsert de la tasa oficial:', error);
-      }
-    } else {
-      warning = 'Supabase no está disponible; no se pudo guardar la tasa de MontosVE.';
-    }
-    return { rate, source: 'monedasve_api', isStale: false, persisted: warning === null, warning };
-  } catch (liveError) {
-    console.error('[cron/test-steam][bcv-live] Falló la consulta a MontosVE:', liveError);
-    const storedRate = await getStoredBcvRate();
-    return {
-      rate: storedRate.rate,
-      source: 'supabase_fallback',
-      isStale: true,
-      persisted: true,
-      warning: `MontosVE no respondió; se usó la última tasa válida guardada en Supabase (${storedRate.source}).`,
-    };
+function parseCatalogSyncSummary(value: unknown): CatalogSyncSummary {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error('Supabase devolvió una respuesta inválida al sincronizar el catálogo.');
   }
+
+  const summary = value as Record<string, unknown>;
+  if (
+    summary.success !== true
+    || typeof summary.bcv_rate !== 'number'
+    || typeof summary.updated_at !== 'string'
+    || typeof summary.products_updated !== 'number'
+    || !Number.isInteger(summary.products_updated)
+    || summary.products_updated < 0
+    || !Array.isArray(summary.products)
+    || summary.products.length !== summary.products_updated
+  ) {
+    throw new Error('Supabase no confirmó la actualización atómica del catálogo.');
+  }
+
+  const products = summary.products.map((product): CatalogSyncProduct => {
+    if (typeof product !== 'object' || product === null || Array.isArray(product)) {
+      throw new Error('Supabase devolvió un producto inválido en el resumen de sincronización.');
+    }
+
+    const row = product as Record<string, unknown>;
+    if (
+      typeof row.variant_id !== 'string'
+      || typeof row.product_id !== 'string'
+      || typeof row.best_price_usd !== 'number'
+      || typeof row.profit_margin_percent !== 'number'
+      || typeof row.final_price_usd !== 'number'
+      || typeof row.final_price_bs !== 'number'
+    ) {
+      throw new Error('Supabase devolvió precios inválidos en el resumen de sincronización.');
+    }
+
+    return {
+      variant_id: row.variant_id,
+      product_id: row.product_id,
+      best_price_usd: row.best_price_usd,
+      profit_margin_percent: row.profit_margin_percent,
+      final_price_usd: row.final_price_usd,
+      final_price_bs: row.final_price_bs,
+    };
+  });
+
+  return {
+    success: true,
+    bcv_rate: summary.bcv_rate,
+    updated_at: summary.updated_at,
+    products_updated: summary.products_updated,
+    products,
+  };
+}
+
+async function resolveBcvRate() {
+  return fetchMontosveRate(process.env.MONTOSVE_API_KEY || '');
 }
 
 async function syncEnebaProducts(
@@ -193,23 +235,6 @@ async function syncEnebaProducts(
         if (checkError) throw checkError;
       }
 
-      const { error: saveError } = await supabase
-        .from('product_pricing')
-        .update({
-          profit_margin_percent: marginPercent,
-          current_supplier: 'eneba',
-          current_seller_name: offer.sellerName,
-          current_offer_url: offer.offerUrl,
-          current_cost_usd: offer.priceUsd,
-          applied_margin_percent: marginPercent,
-          final_price_usd: finalPriceUsd,
-          final_price_bs: finalPriceBs,
-          bcv_rate: bcvRate,
-          price_checked_at: checkedAt,
-          updated_at: checkedAt,
-        })
-        .eq('variant_id', product.variant_id);
-      if (saveError) throw saveError;
     } catch (error) {
       result.success = false;
       result.error = getErrorMessage(error, 'No se pudo sincronizar el precio.');
@@ -234,7 +259,6 @@ export async function GET(request: Request) {
   }
 
   let bcvRate: number | null = null;
-  let bcvRateIsStale = false;
   const errors: string[] = [];
   const warnings: string[] = [];
 
@@ -295,29 +319,23 @@ export async function GET(request: Request) {
     }
 
     const checkedAt = new Date().toISOString();
-    const [rateResult, results] = await Promise.all([
-      resolveBcvRate(supabase)
-        .then((result) => {
-          if (result.isStale) {
-            warnings.push(result.warning ?? 'Se usó la última tasa BCV guardada.');
-            console.warn('[cron/test-steam][bcv] Se usará la tasa BCV guardada en Supabase.');
-          } else if (result.warning) {
-            warnings.push(result.warning);
-          }
-          return {
-            rate: result.rate,
-            source: result.source,
-            stale: result.isStale,
-            persisted: result.persisted,
-          };
-        })
-        .catch((error: unknown) => {
-          const message = error instanceof Error ? error.message : 'No se pudo obtener una tasa BCV válida.';
-          errors.push(`Tasa BCV: ${message}`);
-          console.error('[cron/test-steam][bcv] No se obtuvo tasa oficial ni fallback:', error);
-          return { rate: null, source: 'monedasve_api', stale: true, persisted: false };
-        }),
-      Promise.all(suppliers.map(async (supplier): Promise<SupplierCheck> => {
+    try {
+      bcvRate = await resolveBcvRate();
+    } catch (error) {
+      const message = getErrorMessage(error, 'No se pudo obtener una tasa BCV válida de MontosVE.');
+      console.error('[cron/test-steam][bcv] Falló la obtención de la tasa oficial:', error);
+      return jsonResponse({
+        success: false,
+        bcv_rate: null,
+        source: 'monedasve_api',
+        timestamp: checkedAt,
+        products_updated: 0,
+        products: [],
+        error: message,
+      });
+    }
+
+    const results = await Promise.all(suppliers.map(async (supplier): Promise<SupplierCheck> => {
         try {
           const offer = await fetchSupplierOffer(supplier);
           return {
@@ -346,10 +364,7 @@ export async function GET(request: Request) {
             checked_at: checkedAt,
           };
         }
-      })),
-    ]);
-    bcvRate = rateResult.rate;
-    bcvRateIsStale = rateResult.stale;
+      }));
 
     if (supabase && results.length > 0) {
       try {
@@ -405,32 +420,44 @@ export async function GET(request: Request) {
       console.error('[cron/test-steam][calculation] Sin comparación completa; no se calcula el precio final.');
     }
 
-    const products = bcvRate === null
-      ? []
-      : await syncEnebaProducts(
-        supabase,
-        bcvRate,
-        results.find((result) => result.supplier === 'eneba') ?? null,
-        checkedAt
-      );
-    for (const product of products) {
+    const fetchedProducts = await syncEnebaProducts(
+      supabase,
+      bcvRate,
+      results.find((result) => result.supplier === 'eneba') ?? null,
+      checkedAt
+    );
+    for (const product of fetchedProducts) {
       if (!product.success) {
         errors.push(`${product.variant_id}: ${product.error ?? 'No se pudo actualizar.'}`);
       }
     }
 
+    if (!supabase) {
+      throw new Error('Supabase no está disponible; no se modificó la tasa ni el catálogo.');
+    }
+
+    const { data: syncData, error: syncError } = await supabase.rpc('sync_catalog_prices_with_bcv', {
+      p_bcv_rate: bcvRate,
+      p_updated_at: checkedAt,
+      p_supplier_prices: fetchedProducts
+        .filter((product) => product.success && product.best_price_usd !== null)
+        .map((product) => ({
+          variant_id: product.variant_id,
+          cost_usd: product.best_price_usd,
+          supplier: 'eneba',
+          seller_name: product.seller_name,
+          offer_url: product.offer_url,
+        })),
+    });
+    if (syncError) throw syncError;
+    const syncSummary = parseCatalogSyncSummary(syncData);
+
     return jsonResponse({
-      success: bcvRate !== null
-        && !bcvRateIsStale
-        && rateResult.persisted
-        && products.length > 0
-        && products.every((product) => product.success),
+      success: syncSummary.products_updated > 0,
       bcv_rate: bcvRate,
       source: 'monedasve_api',
-      rate_source: rateResult.source,
       timestamp: checkedAt,
-      bcv_rate_stale: bcvRateIsStale,
-      bcv_rate_persisted: rateResult.persisted,
+      bcv_rate_persisted: true,
       product: PRODUCT_NAME,
       best_price_usd: best?.price_usd ?? null,
       provider: best
@@ -440,16 +467,14 @@ export async function GET(request: Request) {
       profit_margin_percent: profitMarginPercent,
       final_price_usd: finalPriceUsd,
       final_price_bs: finalPriceBs,
-      products_updated: products.filter((product) => product.success).length,
-      products: products.filter((product) => product.success).map((product) => ({
-        variant_id: product.variant_id,
-        product_id: product.product_id,
-        best_price_usd: product.best_price_usd,
-        profit_margin_percent: product.profit_margin_percent,
-        final_price_usd: product.final_price_usd,
-        final_price_bs: product.final_price_bs,
-      })),
-      failed_products: products.filter((product) => !product.success),
+      products_updated: syncSummary.products_updated,
+      products: syncSummary.products,
+      failed_supplier_checks: fetchedProducts
+        .filter((product) => !product.success)
+        .map((product) => ({
+          variant_id: product.variant_id,
+          error: product.error,
+        })),
       comparisons: results.map((result) => ({
         provider: PROVIDER_NAMES[result.supplier],
         price_usd: result.price_usd,
@@ -469,6 +494,8 @@ export async function GET(request: Request) {
       bcv_rate: bcvRate,
       source: 'monedasve_api',
       timestamp: new Date().toISOString(),
+      products_updated: 0,
+      products: [],
       product: PRODUCT_NAME,
       best_price_usd: null,
       provider: null,
