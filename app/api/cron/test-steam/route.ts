@@ -62,8 +62,7 @@ type CatalogSyncSummary = {
 
 function calculateTieredPrice(basePriceUsd: number) {
   const marginPercent = basePriceUsd < 20 ? 33 : basePriceUsd < 50 ? 20 : 8;
-  const serviceBufferUsd = basePriceUsd < 20 ? 0.4 : 0;
-  const finalPriceUsd = Number((basePriceUsd * (1 + marginPercent / 100) + serviceBufferUsd).toFixed(2));
+  const finalPriceUsd = Number((basePriceUsd * (1 + marginPercent / 100) + 0.4).toFixed(2));
   return { marginPercent, finalPriceUsd };
 }
 
