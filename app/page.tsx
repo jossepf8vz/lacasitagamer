@@ -989,9 +989,10 @@ export default function App() {
 
     let active = true;
     const controller = new AbortController();
-    const variantIds = Array.from(new Set(
-      adminSalesHistory.flatMap((sale) => sale.items.map((item) => item.variantId))
-    ));
+    const variantIds = Array.from(new Set([
+      'v-s10-glo',
+      ...adminSalesHistory.flatMap((sale) => sale.items.map((item) => item.variantId)),
+    ]));
 
     const loadSaleSupplierPrices = async () => {
       if (variantIds.length === 0) {
@@ -1612,40 +1613,57 @@ export default function App() {
                         <p className="text-[11px] font-bold text-purple-300 uppercase tracking-wider flex items-center gap-1">
                           <ArrowUpRight className="w-3.5 h-3.5" /> Fulfillment y proveedores:
                         </p>
-                        {sale.items.map((item, idx) => (
-                          <div key={idx} className="bg-slate-900/90 p-3 rounded-xl border border-slate-800 flex flex-col lg:flex-row justify-between items-start lg:items-center gap-3">
-                            <div className="shrink-0">
-                              <p className="font-bold text-white text-xs">{item.name}</p>
-                              <p className="mt-0.5 text-[11px] text-slate-400">Precio de venta: ${item.priceUsd.toFixed(2)} USD</p>
-                            </div>
+                        {sale.items.map((item, idx) => {
+                          const exactPrices = saleSupplierPrices[item.variantId] ?? [];
+                          const isSteamTwentyReference = item.variantId === 'v-s20-glo' && exactPrices.length === 0;
+                          const supplierPrices = isSteamTwentyReference
+                            ? saleSupplierPrices['v-s10-glo'] ?? []
+                            : exactPrices;
 
-                            <div className="flex w-full flex-wrap gap-2 lg:justify-end">
-                              {(saleSupplierPrices[item.variantId] ?? []).length > 0
-                                ? saleSupplierPrices[item.variantId].map((comparison) => (
-                                  <a
-                                    key={comparison.supplier}
-                                    href={comparison.offer_url ?? comparison.source_url}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="flex min-w-36 items-center justify-between gap-3 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-left transition hover:border-purple-500/60 hover:bg-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-400"
-                                    aria-label={`${comparison.supplier}: ${comparison.price_usd === null ? 'No disponible' : `$${comparison.price_usd.toFixed(2)} USD`}. Abrir oferta del proveedor.`}
-                                  >
-                                    <span>
-                                      <span className="block text-[10px] font-bold capitalize text-slate-200">{comparison.supplier}</span>
-                                      {comparison.seller_name && (
-                                        <span className="block text-[9px] text-slate-400">{comparison.seller_name}</span>
-                                      )}
-                                      <span className={`block text-[10px] font-mono ${comparison.price_usd !== null ? 'text-cyan-300' : 'text-slate-500'}`}>
-                                        {comparison.price_usd === null ? 'No disponible' : `$${comparison.price_usd.toFixed(2)} USD`}
-                                      </span>
-                                    </span>
-                                    <ArrowUpRight className="h-3.5 w-3.5 shrink-0 text-purple-300" aria-hidden="true" />
-                                  </a>
-                                ))
-                                : <p className="self-center text-[11px] text-slate-500">Sin precios de proveedores registrados para esta variante.</p>}
+                          return (
+                            <div key={idx} className="bg-slate-900/90 p-3 rounded-xl border border-slate-800 flex flex-col lg:flex-row justify-between items-start lg:items-center gap-3">
+                              <div className="shrink-0">
+                                <p className="font-bold text-white text-xs">{item.name}</p>
+                                <p className="mt-0.5 text-[11px] text-slate-400">Precio de venta: ${item.priceUsd.toFixed(2)} USD</p>
+                              </div>
+
+                              <div className="w-full space-y-2 lg:flex-1">
+                                {isSteamTwentyReference && supplierPrices.length > 0 && (
+                                  <p className="text-[11px] font-semibold text-amber-300">
+                                    Referencia de prueba: estos precios y enlaces son de Steam $10, no corresponden al producto de $20.
+                                  </p>
+                                )}
+                                <div className="flex w-full flex-wrap gap-2 lg:justify-end">
+                                  {supplierPrices.length > 0
+                                    ? supplierPrices.map((comparison) => (
+                                      <a
+                                        key={comparison.supplier}
+                                        href={comparison.offer_url ?? comparison.source_url}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="flex min-w-36 items-center justify-between gap-3 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-left transition hover:border-purple-500/60 hover:bg-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-400"
+                                        aria-label={`${comparison.supplier}${isSteamTwentyReference ? ' (referencia de prueba Steam $10)' : ''}: ${comparison.price_usd === null ? 'No disponible' : `$${comparison.price_usd.toFixed(2)} USD`}. Abrir ${isSteamTwentyReference ? 'oferta de referencia' : 'oferta'} del proveedor.`}
+                                      >
+                                        <span>
+                                          <span className="block text-[10px] font-bold capitalize text-slate-200">
+                                            {comparison.supplier}{isSteamTwentyReference ? ' · ref. $10' : ''}
+                                          </span>
+                                          {comparison.seller_name && (
+                                            <span className="block text-[9px] text-slate-400">{comparison.seller_name}</span>
+                                          )}
+                                          <span className={`block text-[10px] font-mono ${comparison.price_usd !== null ? 'text-cyan-300' : 'text-slate-500'}`}>
+                                            {comparison.price_usd === null ? 'No disponible' : `$${comparison.price_usd.toFixed(2)} USD`}
+                                          </span>
+                                        </span>
+                                        <ArrowUpRight className="h-3.5 w-3.5 shrink-0 text-purple-300" aria-hidden="true" />
+                                      </a>
+                                    ))
+                                    : <p className="self-center text-[11px] text-slate-500">Sin precios de proveedores registrados para esta variante.</p>}
+                                </div>
+                              </div>
                             </div>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
 
                       {sale.status !== 'Aprobado' && (
