@@ -7,33 +7,75 @@ export const revalidate = 0;
 
 const noStoreHeaders = { 'Cache-Control': 'no-store' };
 
-async function toAdminOrder(order: Record<string, unknown>, supabase: ReturnType<typeof getSupabaseServerClient>) {
-  const createdAt = String(order.created_at);
-  let paymentProofUrl: string | null = null;
-  if (typeof order.payment_proof_path === 'string' && order.payment_proof_path) {
-    const { data, error } = await supabase.storage
-      .from('payment-proofs')
-      .createSignedUrl(order.payment_proof_path, 60 * 60);
-    if (error) throw error;
-    paymentProofUrl = data.signedUrl;
+type SaleRow = Record<string, unknown>;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function saleItems(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!isRecord(item)
+      || typeof item.name !== 'string'
+      || typeof item.variantId !== 'string'
+      || typeof item.gameId !== 'string') return [];
+    const priceUsd = Number(item.priceUsd);
+    const quantity = Number(item.quantity);
+    if (!Number.isFinite(priceUsd) || !Number.isInteger(quantity) || quantity < 1) return [];
+    return [{ name: item.name, variantId: item.variantId, gameId: item.gameId, priceUsd, quantity }];
+  });
+}
+
+async function toAdminOrders(rows: SaleRow[], supabase: ReturnType<typeof getSupabaseServerClient>) {
+  const grouped = new Map<string, SaleRow[]>();
+  for (const row of rows) {
+    const orderId = String(row.order_id);
+    const group = grouped.get(orderId) ?? [];
+    group.push(row);
+    grouped.set(orderId, group);
   }
 
-  return {
-    id: String(order.display_id),
-    databaseId: String(order.id),
-    date: new Intl.DateTimeFormat('es-VE').format(new Date(createdAt)),
-    createdAt,
-    customerEmail: String(order.customer_email),
-    phone: String(order.customer_phone),
-    paymentMethod: String(order.payment_method),
-    bankName: String(order.payment_bank),
-    referenceNumber: String(order.payment_reference),
-    totalUsd: Number(order.total_usd),
-    totalBs: Number(order.total_bs),
-    status: order.status === 'aprobado' ? 'Aprobado' : 'Pendiente',
-    items: order.items,
-    paymentProofUrl,
-  };
+  return Promise.all(Array.from(grouped.entries()).map(async ([orderId, orderRows]) => {
+    const order = orderRows[0];
+    const customerInfo = isRecord(order.customer_info) ? order.customer_info : {};
+    const createdAt = String(order.created_at);
+    const items = saleItems(customerInfo.items);
+    const totalUsd = Number(customerInfo.order_total);
+    const totalBs = Number(customerInfo.total_bs);
+    const paymentProofPath = customerInfo.payment_proof_path;
+    let paymentProofUrl: string | null = null;
+    if (typeof paymentProofPath === 'string' && paymentProofPath) {
+      const { data, error } = await supabase.storage
+        .from('payment-proofs')
+        .createSignedUrl(paymentProofPath, 60 * 60);
+      if (error) throw error;
+      paymentProofUrl = data.signedUrl;
+    }
+
+    return {
+      id: `LCG-${orderId.slice(0, 8).toUpperCase()}`,
+      databaseId: orderId,
+      date: new Intl.DateTimeFormat('es-VE').format(new Date(createdAt)),
+      createdAt,
+      customerEmail: String(customerInfo.email ?? ''),
+      phone: String(customerInfo.phone ?? ''),
+      paymentMethod: String(order.method),
+      bankName: String(customerInfo.bank_name ?? ''),
+      referenceNumber: String(order.reference),
+      totalUsd: Number.isFinite(totalUsd) ? totalUsd : orderRows.reduce((sum, row) => sum + Number(row.total || 0), 0),
+      totalBs: Number.isFinite(totalBs) ? totalBs : 0,
+      status: orderRows.every((row) => row.status === 'aprobado') ? 'Aprobado' : 'Pendiente',
+      items: items.length > 0 ? items : orderRows.map((row) => ({
+        name: String(row.variant_id),
+        variantId: String(row.variant_id),
+        gameId: '',
+        priceUsd: Number(row.total),
+        quantity: 1,
+      })),
+      paymentProofUrl,
+    };
+  }));
 }
 
 export async function GET(request: Request) {
@@ -43,15 +85,15 @@ export async function GET(request: Request) {
 
     const supabase = getSupabaseServerClient();
     const { data, error } = await supabase
-      .from('orders')
+      .from('sales')
       .select('*')
       .order('created_at', { ascending: false })
-      .limit(200);
+      .limit(1000);
 
     if (error) throw error;
 
     return NextResponse.json(
-      { orders: await Promise.all((data ?? []).map((order) => toAdminOrder(order, supabase))) },
+      { orders: await toAdminOrders((data ?? []) as SaleRow[], supabase) },
       { headers: noStoreHeaders }
     );
   } catch (error) {
@@ -86,16 +128,16 @@ export async function PATCH(request: Request) {
 
     const supabase = getSupabaseServerClient();
     const { data, error } = await supabase
-      .from('orders')
+      .from('sales')
       .update({ status: 'aprobado', updated_at: new Date().toISOString() })
-      .eq('id', body.id)
-      .select('*')
-      .maybeSingle();
+      .eq('order_id', body.id)
+      .select('*');
 
     if (error) throw error;
-    if (!data) return NextResponse.json({ error: 'No se encontró el pedido.' }, { status: 404, headers: noStoreHeaders });
+    if (!data?.length) return NextResponse.json({ error: 'No se encontró el pedido.' }, { status: 404, headers: noStoreHeaders });
 
-    return NextResponse.json({ order: await toAdminOrder(data, supabase) }, { headers: noStoreHeaders });
+    const [order] = await toAdminOrders(data as SaleRow[], supabase);
+    return NextResponse.json({ order }, { headers: noStoreHeaders });
   } catch (error) {
     console.error('[api/admin/orders] No se pudo actualizar el estado del pedido.', error);
     return NextResponse.json({ error: 'No se pudo actualizar el pedido.' }, { status: 500, headers: noStoreHeaders });

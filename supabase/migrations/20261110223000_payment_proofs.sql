@@ -1,5 +1,11 @@
-alter table public.orders
-  add column if not exists payment_proof_path text;
+do $$
+begin
+  if to_regclass('public.orders') is not null then
+    alter table public.orders
+      add column if not exists payment_proof_path text;
+  end if;
+end;
+$$;
 
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 values (

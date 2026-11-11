@@ -1034,7 +1034,7 @@ export default function App() {
     setAdminOrdersLoading(true);
     const channel = supabase
       .channel('admin-orders-realtime')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => {
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'sales' }, () => {
         if (refreshTimeout) clearTimeout(refreshTimeout);
         refreshTimeout = setTimeout(() => void loadOrders(), 150);
       })
@@ -1454,33 +1454,44 @@ export default function App() {
       }))));
       if (paymentProofFile) orderForm.set('paymentProof', paymentProofFile);
 
-      const response = await fetch('/api/orders', {
+      const response = await fetch('/api/sales', {
         method: 'POST',
         cache: 'no-store',
         body: orderForm,
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error ?? 'No se pudo registrar el pedido.');
-      if (!result.order || typeof result.order.id !== 'string') {
+      if (typeof result.orderId !== 'string') {
         throw new Error('El servidor no devolvió la confirmación del pedido.');
       }
 
-      const order = result.order as AdminOrder;
-      setUser({ email: checkoutForm.email, phone: checkoutForm.phone });
-      setUserOrders((previous) => [order, ...previous]);
-      setCompletedOrder(order);
-      setConfirmationSeconds(300);
+      const confirmation = {
+        items: cart.map((item) => ({
+          name: `${item.title} (${item.platform})`,
+          variantId: item.variantId,
+          quantity: item.quantity,
+          priceUsd: item.priceUsd,
+        })),
+        email: checkoutForm.email,
+        submittedAt: Date.now(),
+      };
+      try {
+        sessionStorage.setItem(`checkout-success-${result.orderId}`, JSON.stringify(confirmation));
+      } catch (storageError) {
+        console.error('No se pudo guardar el resumen local de confirmación.', storageError);
+      }
       checkoutRequestKey.current = null;
       setCart([]);
       setUsePointsInCheckout(false);
       setPaymentProofFile(null);
       setIsCheckoutOpen(false);
-      setActiveTab('confirmation');
-      router.push(`/?pedido=${encodeURIComponent(order.id)}`);
+      router.push(`/checkout/success?orderId=${encodeURIComponent(result.orderId)}`);
     } catch (error) {
-      setCheckoutError(error instanceof Error
+      const message = error instanceof Error
         ? error.message
-        : 'No se pudo registrar el pedido. No se generó ningún producto.');
+        : 'No se pudo registrar el pedido. No se generó ningún producto.';
+      setCheckoutError(message);
+      window.alert(`No se pudo procesar el pago: ${message}`);
     } finally {
       setIsProcessingOrder(false);
     }
