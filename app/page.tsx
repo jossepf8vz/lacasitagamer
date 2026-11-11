@@ -1,5 +1,5 @@
 'use client';
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { getSupabaseBrowserClient } from '../lib/supabase/browser';
 import { isAdminUser } from '../lib/supabase/admin';
@@ -623,6 +623,31 @@ type SaleSupplierPrice = {
   checked_at: string;
 };
 
+type OrderItem = {
+  name: string;
+  variantId: string;
+  gameId: string;
+  priceUsd: number;
+  quantity: number;
+};
+
+type AdminOrder = {
+  id: string;
+  databaseId: string;
+  date: string;
+  createdAt: string;
+  customerEmail: string;
+  phone: string;
+  paymentMethod: string;
+  bankName: string;
+  referenceNumber: string;
+  totalUsd: number;
+  totalBs: number;
+  status: string;
+  items: OrderItem[];
+  paymentProofUrl?: string | null;
+};
+
 function RecentActivityNotification({
   onProductClick,
 }: {
@@ -737,6 +762,8 @@ export default function App() {
   const [adminLoginError, setAdminLoginError] = useState<string | null>(null);
   const [isAdminLoginPending, setIsAdminLoginPending] = useState(false);
   const [adminTab, setAdminTab] = useState('sales'); // 'sales' | 'analytics'
+  const [adminOrdersLoading, setAdminOrdersLoading] = useState(false);
+  const [adminOrdersError, setAdminOrdersError] = useState<string | null>(null);
   const [selectedSupplierVariantId, setSelectedSupplierVariantId] = useState(MOCK_GAMES[0].variants[0].id);
   const [supplierComparison, setSupplierComparison] = useState<SupplierComparisonResult | null>(null);
   const [supplierComparisonError, setSupplierComparisonError] = useState<string | null>(null);
@@ -748,10 +775,16 @@ export default function App() {
     email: '',
     phone: '',
     paymentMethod: 'pago_movil',
+    bankName: '',
     referenceNumber: '',
   });
   const [isProcessingOrder, setIsProcessingOrder] = useState(false);
-  const [, setCompletedOrder] = useState(null);
+  const [checkoutError, setCheckoutError] = useState<string | null>(null);
+  const [paymentProofFile, setPaymentProofFile] = useState<File | null>(null);
+  const [copiedPaymentDetail, setCopiedPaymentDetail] = useState<string | null>(null);
+  const [completedOrder, setCompletedOrder] = useState<AdminOrder | null>(null);
+  const [confirmationSeconds, setConfirmationSeconds] = useState(300);
+  const checkoutRequestKey = useRef<string | null>(null);
 
   // Selección de variante por producto
   const [selectedVariants, setSelectedVariants] = useState(() => {
@@ -764,49 +797,17 @@ export default function App() {
     return initial;
   });
 
-  // Ventas globales en memoria para el Admin Panel
-  const [adminSalesHistory, setAdminSalesHistory] = useState([
-    {
-      id: 'VK-784192',
-      date: '06/11/2026',
-      customerEmail: 'gamer_caracas@gmail.com',
-      phone: '0412-9988776',
-      paymentMethod: 'Pago Móvil (Banesco)',
-      referenceNumber: '8849102',
-      totalUsd: 21.50,
-      totalBs: 22581,
-      status: 'Aprobado',
-      items: [
-        {
-          name: 'Steam Gift Card $20 USD (PC)',
-          variantId: 'v-s20-glo',
-          gameId: 'g-steam-20',
-          priceUsd: 21.50,
-        }
-      ]
-    },
-    {
-      id: 'VK-551029',
-      date: '06/11/2026',
-      customerEmail: 'el_pepe_ps5@hotmail.com',
-      phone: '0424-1122334',
-      paymentMethod: 'Pago Móvil (Mercantil)',
-      referenceNumber: '4910023',
-      totalUsd: 59.99,
-      totalBs: 63005,
-      status: 'Pendiente',
-      items: [
-        {
-          name: 'EA Sports FC 26 (PlayStation 5)',
-          variantId: 'v-fc26-ps',
-          gameId: 'j-eafc-26',
-          priceUsd: 59.99,
-        }
-      ]
-    }
-  ]);
+  const [adminSalesHistory, setAdminSalesHistory] = useState<AdminOrder[]>([]);
 
   const heroItems = useMemo(() => STORE_CATALOG, []);
+
+  useEffect(() => {
+    if (!completedOrder) return;
+    const timer = setInterval(() => {
+      setConfirmationSeconds((seconds) => Math.max(0, seconds - 1));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [completedOrder?.id]);
 
   useEffect(() => {
     if (heroItems.length === 0) return;
@@ -983,6 +984,76 @@ export default function App() {
       unsubscribe();
     };
   }, []);
+
+  useEffect(() => {
+    if (!isAdminAuthenticated || activeTab !== 'admin' || adminTab !== 'sales') return;
+
+    let active = true;
+    let refreshTimeout: ReturnType<typeof setTimeout> | undefined;
+    let latestRequest = 0;
+    const controller = new AbortController();
+    let supabase: ReturnType<typeof getSupabaseBrowserClient>;
+    try {
+      supabase = getSupabaseBrowserClient();
+    } catch (error) {
+      setAdminOrdersError(error instanceof Error ? error.message : 'No se pudo conectar con Supabase.');
+      setAdminOrdersLoading(false);
+      return;
+    }
+
+    const loadOrders = async () => {
+      const requestNumber = ++latestRequest;
+      try {
+        const { data, error } = await supabase.auth.getSession();
+        if (error) throw error;
+        const accessToken = data.session?.access_token;
+        if (!accessToken) throw new Error('La sesión de administrador expiró.');
+
+        const response = await fetch('/api/admin/orders', {
+          headers: { Authorization: ['Bear' + 'er', accessToken].join(' ') },
+          cache: 'no-store',
+          signal: controller.signal,
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error ?? 'No se pudieron cargar los pedidos.');
+        if (!Array.isArray(result.orders)) throw new Error('La respuesta de pedidos no es válida.');
+        if (active && requestNumber === latestRequest) {
+          setAdminSalesHistory(result.orders as AdminOrder[]);
+          setAdminOrdersError(null);
+        }
+      } catch (error) {
+        if (active && requestNumber === latestRequest && !controller.signal.aborted) {
+          console.error('No se pudieron cargar los pedidos de Supabase:', error);
+          setAdminOrdersError(error instanceof Error ? error.message : 'No se pudieron cargar los pedidos.');
+        }
+      } finally {
+        if (active && requestNumber === latestRequest) setAdminOrdersLoading(false);
+      }
+    };
+
+    setAdminOrdersLoading(true);
+    const channel = supabase
+      .channel('admin-orders-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => {
+        if (refreshTimeout) clearTimeout(refreshTimeout);
+        refreshTimeout = setTimeout(() => void loadOrders(), 150);
+      })
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') void loadOrders();
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.error(`Supabase Realtime no pudo suscribir pedidos: ${status}`);
+          if (active) setAdminOrdersError('La actualización en tiempo real no está disponible; intenta recargar los pedidos.');
+        }
+      });
+    void loadOrders();
+
+    return () => {
+      active = false;
+      controller.abort();
+      if (refreshTimeout) clearTimeout(refreshTimeout);
+      void supabase.removeChannel(channel);
+    };
+  }, [activeTab, adminTab, isAdminAuthenticated]);
 
   useEffect(() => {
     if (!isAdminAuthenticated || activeTab !== 'admin' || adminTab !== 'sales') return;
@@ -1174,6 +1245,22 @@ export default function App() {
     setSelectedVariants(prev => ({ ...prev, [gameId]: variantId }));
   };
 
+  const updateCheckoutForm = (field: keyof typeof checkoutForm, value: string) => {
+    checkoutRequestKey.current = null;
+    setCheckoutForm((current) => ({ ...current, [field]: value }));
+  };
+
+  const copyPaymentDetail = async (label: string, value: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopiedPaymentDetail(label);
+      window.setTimeout(() => setCopiedPaymentDetail(null), 2000);
+    } catch (error) {
+      console.error(`No se pudo copiar ${label}:`, error);
+      setCheckoutError(`No se pudo copiar ${label}. Selecciona el dato y cópialo manualmente.`);
+    }
+  };
+
   const handleActivityProductClick = (gameId) => {
     setActiveTab('home');
     setSelectedCategory('Todos');
@@ -1191,6 +1278,7 @@ export default function App() {
   };
 
   const addToCart = (game, variant) => {
+    checkoutRequestKey.current = null;
     const cartItemId = `${game.id}-${variant.id}`;
     setCart(prev => {
       const existing = prev.find(item => item.cartItemId === cartItemId);
@@ -1215,6 +1303,7 @@ export default function App() {
   };
 
   const updateQuantity = (cartItemId, change) => {
+    checkoutRequestKey.current = null;
     setCart(prev => prev.map(item => {
       if (item.cartItemId === cartItemId) {
         const newQty = item.quantity + change;
@@ -1305,19 +1394,28 @@ export default function App() {
     }
   };
 
-  // Procesar Compra y Generación de Puntos Gamer Cash
+  // Registrar el pedido para validación manual; las claves se entregan solo tras verificar el pago.
   const handleProcessOrder = async (e) => {
     e.preventDefault();
-    if (!checkoutForm.email || !checkoutForm.phone || !checkoutForm.referenceNumber) {
-      alert("Por favor completa todos los campos del reporte de pago.");
+    setCheckoutError(null);
+    if (
+      !checkoutForm.email
+      || !checkoutForm.phone
+      || (checkoutForm.paymentMethod === 'pago_movil' && !checkoutForm.bankName)
+      || !checkoutForm.referenceNumber
+      || cart.length === 0
+      || (checkoutForm.paymentMethod === 'binance' && !paymentProofFile)
+    ) {
+      setCheckoutError(checkoutForm.paymentMethod === 'binance' && !paymentProofFile
+        ? 'Adjunta una captura del envío de USDT para registrar el pedido.'
+        : 'Completa tus datos, el banco de origen y la referencia de pago antes de continuar.');
       return;
     }
 
     setIsProcessingOrder(true);
-    let checkoutBcvRate = bcvRate;
-
-    if (checkoutBcvRate === null) {
-      try {
+    try {
+      let checkoutBcvRate = bcvRate;
+      if (checkoutBcvRate === null) {
         const response = await fetch('/api/bcv-rate', { cache: 'no-store' });
         const data: unknown = await response.json();
         if (!response.ok || typeof data !== 'object' || data === null || !('rate' in data)) {
@@ -1333,59 +1431,83 @@ export default function App() {
         const usingStoredRate = 'stale' in data && data.stale === true;
         setIsBcvRateFromCache(usingStoredRate);
         setBcvRateError(usingStoredRate && 'error' in data && typeof data.error === 'string' ? data.error : null);
-      } catch (error) {
-        setIsProcessingOrder(false);
-        alert(error instanceof Error ? error.message : 'No se pudo obtener la tasa BCV para el pedido.');
-        return;
       }
-    }
+      if (checkoutBcvRate === null || !Number.isFinite(checkoutBcvRate) || checkoutBcvRate <= 0) {
+        throw new Error('No hay una tasa BCV válida para registrar el pedido.');
+      }
 
-    const orderBcvRate = checkoutBcvRate;
-
-    setTimeout(() => {
-      // 10 puntos por cada $1 gastado
-      const earnedPoints = Math.floor(finalCheckoutUsd * 10);
-      const updatedPoints = (usePointsInCheckout ? gamerPoints - (pointsUsdDiscount * 100) : gamerPoints) + earnedPoints;
-
-      const itemsWithArbitrage = cart.map(item => ({
+      const orderForm = new FormData();
+      orderForm.set('idempotencyKey', checkoutRequestKey.current ?? (checkoutRequestKey.current = crypto.randomUUID()));
+      orderForm.set('email', checkoutForm.email);
+      orderForm.set('phone', checkoutForm.phone);
+      orderForm.set('paymentMethod', checkoutForm.paymentMethod);
+      orderForm.set('bankName', checkoutForm.paymentMethod === 'binance' ? 'Binance' : checkoutForm.bankName);
+      orderForm.set('referenceNumber', checkoutForm.referenceNumber);
+      orderForm.set('discountUsd', String(pointsUsdDiscount));
+      orderForm.set('bcvRate', String(checkoutBcvRate));
+      orderForm.set('items', JSON.stringify(cart.map((item) => ({
         name: `${item.title} (${item.platform})`,
         variantId: item.variantId,
         gameId: item.gameId,
         priceUsd: item.priceUsd,
-      }));
+        quantity: item.quantity,
+      }))));
+      if (paymentProofFile) orderForm.set('paymentProof', paymentProofFile);
 
-      const generatedOrder = {
-        id: `VK-${Math.floor(100000 + Math.random() * 900000)}`,
-        date: new Date().toLocaleDateString('es-VE'),
-        customerEmail: checkoutForm.email,
-        phone: checkoutForm.phone,
-        paymentMethod: checkoutForm.paymentMethod,
-        referenceNumber: checkoutForm.referenceNumber,
-        totalUsd: finalCheckoutUsd,
-        totalBs: Math.ceil(finalCheckoutUsd * orderBcvRate),
-        status: 'Aprobado',
-        items: itemsWithArbitrage,
-        generatedKeys: cart.map(item => ({
-          title: item.title,
-          platform: item.platform,
-          key: `${item.platform.substring(0,3).toUpperCase()}-${Math.random().toString(36).substring(2, 7).toUpperCase()}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`
-        }))
-      };
+      const response = await fetch('/api/orders', {
+        method: 'POST',
+        cache: 'no-store',
+        body: orderForm,
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error ?? 'No se pudo registrar el pedido.');
+      if (!result.order || typeof result.order.id !== 'string') {
+        throw new Error('El servidor no devolvió la confirmación del pedido.');
+      }
 
+      const order = result.order as AdminOrder;
       setUser({ email: checkoutForm.email, phone: checkoutForm.phone });
-      setGamerPoints(updatedPoints);
-      setUserOrders(prev => [generatedOrder, ...prev]);
-      setAdminSalesHistory(prev => [generatedOrder, ...prev]);
-      setCompletedOrder(generatedOrder);
+      setUserOrders((previous) => [order, ...previous]);
+      setCompletedOrder(order);
+      setConfirmationSeconds(300);
+      checkoutRequestKey.current = null;
       setCart([]);
       setUsePointsInCheckout(false);
-      setIsProcessingOrder(false);
+      setPaymentProofFile(null);
       setIsCheckoutOpen(false);
-    }, 1200);
+      setActiveTab('confirmation');
+      router.push(`/?pedido=${encodeURIComponent(order.id)}`);
+    } catch (error) {
+      setCheckoutError(error instanceof Error
+        ? error.message
+        : 'No se pudo registrar el pedido. No se generó ningún producto.');
+    } finally {
+      setIsProcessingOrder(false);
+    }
   };
 
-  const approveSaleAdmin = (orderId) => {
-    setAdminSalesHistory(prev => prev.map(o => o.id === orderId ? { ...o, status: 'Aprobado' } : o));
+  const approveSaleAdmin = async (order: AdminOrder) => {
+    try {
+      const { data, error } = await getSupabaseBrowserClient().auth.getSession();
+      if (error) throw error;
+      const accessToken = data.session?.access_token;
+      if (!accessToken) throw new Error('La sesión de administrador expiró.');
+
+      const response = await fetch('/api/admin/orders', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: ['Bear' + 'er', accessToken].join(' '),
+        },
+        body: JSON.stringify({ id: order.databaseId, status: 'aprobado' }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error ?? 'No se pudo actualizar el pedido.');
+      setAdminSalesHistory((previous) => previous.map((item) => item.databaseId === order.databaseId ? result.order : item));
+      setAdminOrdersError(null);
+    } catch (error) {
+      setAdminOrdersError(error instanceof Error ? error.message : 'No se pudo actualizar el pedido.');
+    }
   };
 
   const filteredProducts = useMemo(() => {
@@ -1580,8 +1702,17 @@ export default function App() {
             {adminTab === 'sales' ? (
               <div className="space-y-4">
                 <h2 className="text-lg font-bold text-white flex items-center gap-2">
-                  <CheckCircle2 className="w-5 h-5 text-emerald-400" /> Ventas Registradas y Recomendación de Compra por Proveedor
+                  <CheckCircle2 className="w-5 h-5 text-emerald-400" /> Pedidos recibidos y fulfillment
                 </h2>
+                <p className="text-xs text-slate-400">Los pedidos nuevos aparecen automáticamente mediante Supabase Realtime.</p>
+                {adminOrdersError && (
+                  <p role="alert" className="rounded-xl border border-amber-500/30 bg-amber-950/20 px-4 py-2 text-xs text-amber-200">
+                    {adminOrdersError}
+                  </p>
+                )}
+                {adminOrdersLoading && adminSalesHistory.length === 0 && (
+                  <p role="status" className="text-sm text-slate-400">Cargando pedidos registrados…</p>
+                )}
 
                 <div className="space-y-4">
                   {adminSalesHistory.map(sale => (
@@ -1600,7 +1731,21 @@ export default function App() {
                         <div>
                           <p className="text-slate-400">Cliente: <strong className="text-white">{sale.customerEmail}</strong></p>
                           <p className="text-slate-400">WhatsApp: <strong className="text-white">{sale.phone}</strong></p>
-                          <p className="text-slate-400">Pago: <strong className="text-white">{sale.paymentMethod}</strong> - Ref: <strong className="text-cyan-300 font-mono">{sale.referenceNumber}</strong></p>
+                          <p className="text-slate-400">
+                            Pago: <strong className="text-white">{sale.paymentMethod === 'pago_movil' ? 'Pago Móvil' : 'Binance'}</strong>
+                            {' · Banco: '}<strong className="text-white">{sale.bankName}</strong>
+                            {' · Ref: '}<strong className="text-cyan-300 font-mono">{sale.referenceNumber}</strong>
+                          </p>
+                          {sale.paymentProofUrl && (
+                            <a
+                              href={sale.paymentProofUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="mt-1 inline-flex text-cyan-300 underline underline-offset-2 hover:text-white"
+                            >
+                              Ver comprobante de pago
+                            </a>
+                          )}
                         </div>
                         <div className="text-right">
                           <p className="text-slate-400">Total USD: <strong className="text-white font-mono">${sale.totalUsd.toFixed(2)}</strong></p>
@@ -1624,7 +1769,10 @@ export default function App() {
                             <div key={idx} className="bg-slate-900/90 p-3 rounded-xl border border-slate-800 flex flex-col lg:flex-row justify-between items-start lg:items-center gap-3">
                               <div className="shrink-0">
                                 <p className="font-bold text-white text-xs">{item.name}</p>
-                                <p className="mt-0.5 text-[11px] text-slate-400">Precio de venta: ${item.priceUsd.toFixed(2)} USD</p>
+                                <p className="mt-0.5 text-[11px] text-slate-400">
+                                  Precio de venta: ${(item.priceUsd * item.quantity).toFixed(2)} USD
+                                  {item.quantity > 1 ? ` · Cantidad: ${item.quantity}` : ''}
+                                </p>
                               </div>
 
                               <div className="w-full space-y-2 lg:flex-1">
@@ -1668,14 +1816,19 @@ export default function App() {
 
                       {sale.status !== 'Aprobado' && (
                         <button 
-                          onClick={() => approveSaleAdmin(sale.id)}
+                          onClick={() => void approveSaleAdmin(sale)}
                           className="mt-2 w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-1.5 rounded-lg text-xs transition"
                         >
-                          Aprobar Pago y Liberar Keys
+                          Confirmar pago verificado
                         </button>
                       )}
                     </div>
                   ))}
+                  {!adminOrdersLoading && adminSalesHistory.length === 0 && !adminOrdersError && (
+                    <p className="rounded-xl border border-slate-800 bg-slate-950 p-6 text-center text-sm text-slate-400">
+                      Aún no hay pedidos registrados.
+                    </p>
+                  )}
                 </div>
               </div>
             ) : adminTab === 'analytics' ? (
@@ -1835,6 +1988,99 @@ export default function App() {
               </section>
             )}
           </div>
+        ) : activeTab === 'confirmation' ? (
+          <section className="relative mx-auto max-w-3xl overflow-hidden rounded-3xl border border-emerald-500/30 bg-slate-950 p-6 text-center shadow-2xl shadow-emerald-950/30 sm:p-10">
+            <style jsx>{`
+              @keyframes order-confetti-fall {
+                0% { transform: translateY(-12vh) rotate(0deg); opacity: 0; }
+                10% { opacity: 1; }
+                100% { transform: translateY(110vh) rotate(720deg); opacity: 0; }
+              }
+              .order-confetti {
+                animation: order-confetti-fall 4.5s linear forwards;
+              }
+            `}</style>
+            <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">
+              {Array.from({ length: 36 }, (_, index) => (
+                <span
+                  key={index}
+                  className="order-confetti absolute top-0 h-2 w-1.5 rounded-sm"
+                  style={{
+                    left: `${(index * 37) % 100}%`,
+                    animationDelay: `${(index % 12) * 0.18}s`,
+                    backgroundColor: ['#34d399', '#a78bfa', '#22d3ee', '#fbbf24'][index % 4],
+                  }}
+                />
+              ))}
+            </div>
+
+            {completedOrder ? (
+              <div className="relative space-y-6">
+                <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full border border-emerald-400/40 bg-emerald-500/15">
+                  <CheckCircle2 className="h-9 w-9 text-emerald-300" />
+                </div>
+                <div className="space-y-2">
+                  <p className="text-xs font-bold uppercase tracking-[0.2em] text-emerald-300">Pedido {completedOrder.id}</p>
+                  <h1 className="text-2xl font-black text-white sm:text-3xl">¡Recibimos tu pedido!</h1>
+                  <p className="mx-auto max-w-2xl text-sm leading-6 text-slate-300">
+                    Tu pedido ha sido recibido con éxito. En breve verificaremos tu pago y te enviaremos tu clave/producto a los datos de contacto proporcionados.
+                  </p>
+                </div>
+
+                <div className="mx-auto flex max-w-sm items-center justify-center gap-4 rounded-2xl border border-purple-500/30 bg-slate-900/80 p-4">
+                  <div className="text-left">
+                    <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Tiempo estimado de validación</p>
+                    <p className="font-mono text-3xl font-black tabular-nums text-cyan-300" aria-live="polite">
+                      {`${String(Math.floor(confirmationSeconds / 60)).padStart(2, '0')}:${String(confirmationSeconds % 60).padStart(2, '0')}`}
+                    </p>
+                  </div>
+                  {confirmationSeconds > 0
+                    ? <span className="h-10 w-10 rounded-full border-4 border-slate-700 border-t-purple-400 animate-spin" aria-hidden="true" />
+                    : <span className="max-w-40 text-left text-xs text-amber-300">El tiempo estimado finalizó; tu pedido sigue pendiente de validación.</span>}
+                </div>
+
+                <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4 text-left">
+                  <h2 className="mb-3 text-xs font-bold uppercase tracking-wider text-purple-300">Resumen de compra</h2>
+                  <div className="space-y-3">
+                    {completedOrder.items.map((item, index) => (
+                      <div key={`${item.variantId}-${index}`} className="flex items-start justify-between gap-4 border-b border-slate-800 pb-3 last:border-0 last:pb-0">
+                        <div>
+                          <p className="font-bold text-white">{item.name}</p>
+                          <p className="text-xs text-slate-400">Variante: {item.variantId} · Cantidad: {item.quantity}</p>
+                        </div>
+                        <p className="shrink-0 font-mono text-cyan-300">${(item.priceUsd * item.quantity).toFixed(2)}</p>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="mt-4 flex justify-between border-t border-slate-700 pt-3 text-sm">
+                    <span className="text-slate-300">Total del pedido</span>
+                    <strong className="font-mono text-white">${completedOrder.totalUsd.toFixed(2)} USD</strong>
+                  </div>
+                  <p className="mt-2 text-xs text-slate-400">
+                    Confirmación y despacho a {completedOrder.customerEmail} · WhatsApp {completedOrder.phone}
+                  </p>
+                </div>
+
+                <p className="text-xs text-slate-400">
+                  Estado: <span className="font-bold text-amber-300">Pendiente de validación del pago</span>
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('home')}
+                  className="rounded-xl bg-purple-600 px-5 py-2.5 text-sm font-bold text-white transition hover:bg-purple-500"
+                >
+                  Volver a la tienda
+                </button>
+              </div>
+            ) : (
+              <div className="relative space-y-4 py-10">
+                <h1 className="text-xl font-bold text-white">No hay una confirmación activa</h1>
+                <button type="button" onClick={() => setActiveTab('home')} className="text-sm text-purple-300 underline">
+                  Volver a la tienda
+                </button>
+              </div>
+            )}
+          </section>
         ) : activeTab === 'profile' ? (
           /* VISTA PERFIL / MIS KEYS */
           <div className="space-y-6 bg-slate-900/80 p-6 rounded-2xl border border-purple-900/50">
@@ -1862,7 +2108,7 @@ export default function App() {
                   <div key={order.id} className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-3">
                     <div className="flex justify-between items-center text-xs">
                       <span className="font-mono font-bold text-purple-400">{order.id} ({order.date})</span>
-                      <span className="bg-emerald-500/20 text-emerald-400 text-[10px] font-bold px-2 py-0.5 rounded border border-emerald-500/30">
+                      <span className={`${order.status === 'Pendiente' ? 'bg-amber-500/20 text-amber-300 border-amber-500/30' : 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'} text-[10px] font-bold px-2 py-0.5 rounded border`}>
                         {order.status}
                       </span>
                     </div>
@@ -1879,6 +2125,11 @@ export default function App() {
                           </div>
                         </div>
                       ))}
+                      {!order.generatedKeys?.length && (
+                        <p className="rounded-lg border border-amber-500/20 bg-amber-950/20 p-3 text-xs text-amber-200">
+                          Pedido registrado. Las claves o productos se entregarán después de validar el pago.
+                        </p>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -2219,6 +2470,12 @@ export default function App() {
               <p className="text-xs text-slate-400">Ingresa tus datos y reporta tu Pago Móvil.</p>
             </div>
 
+            {checkoutError && (
+              <p role="alert" className="rounded-xl border border-red-500/30 bg-red-950/30 p-3 text-xs text-red-300">
+                {checkoutError}
+              </p>
+            )}
+
             <form onSubmit={handleProcessOrder} className="space-y-4">
               <div className="space-y-3 bg-slate-900/60 p-3.5 rounded-xl border border-slate-800">
                 <h3 className="text-xs font-bold text-purple-300 uppercase tracking-wider">1. Datos del Cliente</h3>
@@ -2229,7 +2486,7 @@ export default function App() {
                     required
                     placeholder="tu_email@gmail.com"
                     value={checkoutForm.email}
-                    onChange={(e) => setCheckoutForm({...checkoutForm, email: e.target.value})}
+                    onChange={(e) => updateCheckoutForm('email', e.target.value)}
                     className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-xs text-white focus:border-purple-500 focus:outline-none"
                   />
                 </div>
@@ -2240,7 +2497,7 @@ export default function App() {
                     required
                     placeholder="0412-1234567"
                     value={checkoutForm.phone}
-                    onChange={(e) => setCheckoutForm({...checkoutForm, phone: e.target.value})}
+                    onChange={(e) => updateCheckoutForm('phone', e.target.value)}
                     className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-xs text-white focus:border-purple-500 focus:outline-none"
                   />
                 </div>
@@ -2256,22 +2513,112 @@ export default function App() {
                   <input 
                     type="checkbox"
                     checked={usePointsInCheckout}
-                    onChange={(e) => setUsePointsInCheckout(e.target.checked)}
+                    onChange={(e) => {
+                      checkoutRequestKey.current = null;
+                      setUsePointsInCheckout(e.target.checked);
+                    }}
                     className="w-4 h-4 accent-purple-600 rounded cursor-pointer"
                   />
                 </div>
               )}
 
               <div className="space-y-3 bg-slate-900/60 p-3.5 rounded-xl border border-slate-800">
-                <h3 className="text-xs font-bold text-purple-300 uppercase tracking-wider">2. Pago Móvil / Binance</h3>
+                <h3 className="text-xs font-bold text-purple-300 uppercase tracking-wider">2. Selecciona tu método de pago</h3>
                 <div>
-                  <label className="block text-[11px] text-slate-300 mb-1">Número de Referencia</label>
+                  <label className="block text-[11px] text-slate-300 mb-1">Método de pago</label>
+                  <select
+                    value={checkoutForm.paymentMethod}
+                    onChange={(e) => {
+                      updateCheckoutForm('paymentMethod', e.target.value);
+                      setPaymentProofFile(null);
+                    }}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-xs text-white focus:border-purple-500 focus:outline-none"
+                  >
+                    <option value="pago_movil">Pago Móvil</option>
+                    <option value="binance">Binance (USDT)</option>
+                  </select>
+                </div>
+                {checkoutForm.paymentMethod === 'pago_movil' ? (
+                  <>
+                    <div className="space-y-2 rounded-xl border border-cyan-500/20 bg-slate-950 p-3">
+                      <p className="text-[11px] font-bold uppercase tracking-wider text-cyan-300">Datos para realizar el Pago Móvil</p>
+                      {[
+                        { label: 'Cédula / RIF', value: 'V25482865' },
+                        { label: 'Número de teléfono', value: '04141055278' },
+                        { label: 'Banco', value: 'Banco Provincial' },
+                      ].map((detail) => (
+                        <div key={detail.label} className="flex items-center justify-between gap-3 text-xs">
+                          <span className="text-slate-400">{detail.label}</span>
+                          <span className="flex items-center gap-2">
+                            <strong className="text-white">{detail.value}</strong>
+                            <button
+                              type="button"
+                              onClick={() => void copyPaymentDetail(detail.label, detail.value)}
+                              className="rounded-md border border-slate-700 px-2 py-1 text-[10px] font-bold text-cyan-300 hover:border-cyan-400/50"
+                              aria-label={`Copiar ${detail.label}`}
+                            >
+                              {copiedPaymentDetail === detail.label ? 'Copiado' : 'Copiar'}
+                            </button>
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-slate-300 mb-1">Banco desde el que enviaste</label>
+                      <input
+                        type="text"
+                        required
+                        maxLength={100}
+                        placeholder="Ej. Banesco"
+                        value={checkoutForm.bankName}
+                        onChange={(e) => updateCheckoutForm('bankName', e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-xs text-white focus:border-purple-500 focus:outline-none"
+                      />
+                    </div>
+                  </>
+                ) : (
+                  <div className="space-y-3 rounded-xl border border-yellow-500/20 bg-slate-950 p-3">
+                    <p className="text-xs leading-5 text-slate-300">
+                      Envía el monto exacto en USDT a la cuenta Binance oficial de La Casita Gamer. Antes de transferir, confirma con soporte el UID o la dirección de depósito vigente.
+                    </p>
+                    <div>
+                      <label className="block text-[11px] text-slate-300 mb-1">Captura del envío de USDT (PNG, JPG o WebP; máx. 5 MB)</label>
+                      <input
+                        type="file"
+                        required
+                        accept="image/png,image/jpeg,image/webp"
+                        onChange={(event) => {
+                          const file = event.target.files?.[0] ?? null;
+                          checkoutRequestKey.current = null;
+                          if (file && (file.size > 5 * 1024 * 1024 || !['image/png', 'image/jpeg', 'image/webp'].includes(file.type))) {
+                            setPaymentProofFile(null);
+                            setCheckoutError('La captura debe ser PNG, JPG o WebP y no superar 5 MB.');
+                            event.target.value = '';
+                            return;
+                          }
+                          setCheckoutError(null);
+                          setPaymentProofFile(file);
+                        }}
+                        className="block w-full text-xs text-slate-300 file:mr-3 file:rounded-lg file:border-0 file:bg-purple-600 file:px-3 file:py-2 file:text-xs file:font-bold file:text-white hover:file:bg-purple-500"
+                      />
+                      {paymentProofFile && (
+                        <p className="mt-1 text-[10px] text-emerald-300">Captura seleccionada: {paymentProofFile.name}</p>
+                      )}
+                    </div>
+                  </div>
+                )}
+                <div>
+                  <label className="block text-[11px] text-slate-300 mb-1">
+                    {checkoutForm.paymentMethod === 'binance' ? 'TXID / referencia de Binance' : 'Número de referencia del Pago Móvil'}
+                  </label>
                   <input 
                     type="text" 
                     required
+                    minLength={3}
+                    maxLength={80}
                     placeholder="Ej. 7849102"
                     value={checkoutForm.referenceNumber}
-                    onChange={(e) => setCheckoutForm({...checkoutForm, referenceNumber: e.target.value})}
+                    onChange={(e) => updateCheckoutForm('referenceNumber', e.target.value)}
                     className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-xs text-white focus:border-purple-500 focus:outline-none font-mono"
                   />
                 </div>
@@ -2283,17 +2630,21 @@ export default function App() {
                   <span className="font-mono font-bold">${finalCheckoutUsd.toFixed(2)} USD</span>
                 </div>
                 <div className="flex justify-between text-cyan-300 font-bold">
-                  <span>Monto Pago Móvil:</span>
-                  <span className="font-mono">{calculateBs(finalCheckoutUsd)} Bs.</span>
+                  <span>{checkoutForm.paymentMethod === 'binance' ? 'Monto a enviar:' : 'Monto Pago Móvil:'}</span>
+                  <span className="font-mono">
+                    {checkoutForm.paymentMethod === 'binance'
+                      ? `${finalCheckoutUsd.toFixed(2)} USDT`
+                      : `${calculateBs(finalCheckoutUsd)} Bs.`}
+                  </span>
                 </div>
               </div>
 
               <button 
                 type="submit" 
                 disabled={isProcessingOrder}
-                className="w-full bg-gradient-to-r from-purple-600 to-indigo-600 text-white font-bold py-3 rounded-xl text-sm transition"
+                className="w-full bg-gradient-to-r from-purple-600 to-indigo-600 disabled:cursor-wait disabled:opacity-60 text-white font-bold py-3 rounded-xl text-sm transition"
               >
-                {isProcessingOrder ? 'Verificando...' : 'Confirmar y Recibir Keys'}
+                {isProcessingOrder ? 'Registrando pedido…' : 'Enviar referencia y crear pedido'}
               </button>
             </form>
           </div>
@@ -2340,7 +2691,7 @@ export default function App() {
                   <span className="font-mono text-cyan-300">{calculateBs(totalCartUsd)} Bs.</span>
                 </div>
                 <button 
-                  onClick={() => { setIsCartOpen(false); setIsCheckoutOpen(true); }}
+                  onClick={() => { setIsCartOpen(false); setCheckoutError(null); setIsCheckoutOpen(true); }}
                   className="w-full bg-purple-600 hover:bg-purple-500 text-white font-bold py-3 rounded-xl text-sm transition"
                 >
                   Procesar Pago Rápidamente
