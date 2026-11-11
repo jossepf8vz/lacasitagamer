@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { SERVICE_FEE_USD } from '../../../lib/pricing/constants';
 import { getSupabaseServerClient } from '../../../lib/supabase/server';
 
 export const runtime = 'nodejs';
@@ -177,7 +178,7 @@ export async function POST(request: Request) {
   const normalizedBankName = (bankName as string).trim();
   const normalizedReference = (reference as string).trim();
   const subtotal = Number(items.reduce((sum, item) => sum + item.priceUsd * item.quantity, 0).toFixed(2));
-  const total = Number((subtotal - discount).toFixed(2));
+  const total = Number((subtotal - discount + SERVICE_FEE_USD).toFixed(2));
   if (total <= 0 || discount > subtotal) {
     return NextResponse.json({ error: 'El total del pedido no es válido.' }, { status: 400, headers: noStoreHeaders });
   }
@@ -249,9 +250,10 @@ export async function POST(request: Request) {
       items,
       subtotal,
       discount,
+      service_fee_usd: SERVICE_FEE_USD,
       order_total: total,
       bcv_rate: Number(bcvRate.toFixed(4)),
-      total_bs: Math.ceil(total * bcvRate),
+      total_bs: Number((total * bcvRate).toFixed(2)),
       payment_proof_path: uploadedProofPath,
     };
     const totalsByVariant = new Map<string, number>();

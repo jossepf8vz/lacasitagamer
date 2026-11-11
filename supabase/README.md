@@ -30,7 +30,7 @@ Ejecuta `migrations/20261111123000_playstation_price_sync.sql` para registrar `v
 
 El catálogo muestra PlayStation Network Card $10 USD (USA) dentro de Gift Cards, con la variante `PlayStation` / `US Store`; el precio utiliza el snapshot sincronizado cuando está disponible.
 
-Ejecuta `migrations/20261111150000_dynamic_tiered_pricing.sql` para retirar el trigger previo que fijaba el margen de Steam en 33% y permitir que Supabase guarde el margen escalonado calculado por el cron. Para todos los productos sincronizados, el cron aplica 33% + $0.40 si el costo base es menor a $20, 20% entre $20 y $49.99, y 8% desde $50. Guarda el precio final USD y la conversión BCV en Bs. redondeados a dos decimales, junto con el porcentaje aplicado.
+Ejecuta `migrations/20261111150000_dynamic_tiered_pricing.sql` para retirar el trigger previo que fijaba el margen de Steam en 33% y permitir que Supabase guarde el margen escalonado calculado por el cron. Para todos los productos sincronizados, el cron aplica 33% si el costo base es menor a $20, 20% entre $20 y $49.99, y 8% desde $50, sin sumar el cargo de servicio. Guarda el precio final USD y la conversión BCV en Bs. redondeados a dos decimales, junto con el porcentaje aplicado.
 
 ## Ofertas de Steam Eneba/G2A
 
@@ -40,6 +40,8 @@ Ejecuta `migrations/20261111150000_dynamic_tiered_pricing.sql` para retirar el t
 4. El cron aplica el margen escalonado descrito arriba al costo base del proveedor. La tienda lee el snapshot final guardado por el cron y calcula su equivalente en Bs. con la tasa BCV; el panel muestra el vendedor y enlace disponibles al actualizar la comparación.
 
 La ruta `/api/bcv-rate` consulta MontosVE con `X-API-Key` como máximo una vez cada 12 horas en condiciones normales. Si existe una tasa guardada en `exchange_rates` (`currency = 'USD'`, o `source = 'bcv_official_ves'` como compatibilidad) con menos de 12 horas, la reutiliza; si falta la clave o la API falla, devuelve la última tasa válida guardada, incluso si está vencida, y como último respaldo la tasa de la variante Steam en `product_pricing`. Cada tasa externa válida se persiste con fecha actual y recalcula los precios Bs. La clave API debe configurarse como `MONTOSVE_API_KEY` solo en el servidor, nunca con prefijo `NEXT_PUBLIC_`. Devuelve `bcv_rate` y `source`; el checkout también consulta esta ruta cuando todavía no tiene una tasa en memoria y solo detiene el pedido cuando no hay ninguna tasa válida disponible.
+
+El checkout separa el precio de los productos del cargo de servicio de USD 0.40. El total incluye el subtotal descontado cuando aplica Gamer Cash Points más ese cargo; Pago Móvil muestra el desglose en USD y Bs. según la tasa BCV. El cargo cubre procesamiento digital, soporte y administración.
 
 ## Checkout, ventas y Supabase Realtime
 

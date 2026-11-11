@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import type { User as SupabaseUser } from '@supabase/supabase-js';
 import { getSupabaseBrowserClient } from '../lib/supabase/browser';
 import { isAdminUser } from '../lib/supabase/admin';
+import { SERVICE_FEE_USD } from '../lib/pricing/constants';
 import { 
   ShoppingCart, Search, Tag, Gamepad2, ShieldCheck, Flame, 
   Sparkles, Filter, X, Home, ShoppingBag, User, 
@@ -1328,7 +1329,20 @@ export default function App() {
     return Math.min(gamerPoints / 100, totalCartUsd);
   }, [usePointsInCheckout, gamerPoints, totalCartUsd]);
 
-  const finalCheckoutUsd = useMemo(() => Math.max(0, totalCartUsd - pointsUsdDiscount), [totalCartUsd, pointsUsdDiscount]);
+  const finalCheckoutUsd = useMemo(
+    () => Number(Math.max(0, totalCartUsd - pointsUsdDiscount).toFixed(2)),
+    [totalCartUsd, pointsUsdDiscount]
+  );
+  const checkoutTotalUsd = Number((finalCheckoutUsd + SERVICE_FEE_USD).toFixed(2));
+  const serviceFeeBs = bcvRate === null ? null : Number((SERVICE_FEE_USD * bcvRate).toFixed(2));
+  const checkoutTotalBs = bcvRate === null ? null : Number((checkoutTotalUsd * bcvRate).toFixed(2));
+  const cartTotalUsdWithServiceFee = Number((totalCartUsd + SERVICE_FEE_USD).toFixed(2));
+  const cartTotalBsWithServiceFee = bcvRate === null
+    ? null
+    : Number((cartTotalUsdWithServiceFee * bcvRate).toFixed(2));
+  const formatCheckoutBs = (amount: number | null) => amount === null
+    ? '—'
+    : new Intl.NumberFormat('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount);
   const authenticatedCustomer = getCustomerProfile(customerAuthUser);
   const checkoutCustomer = {
     email: authenticatedCustomer.email || checkoutForm.email,
@@ -1586,7 +1600,7 @@ export default function App() {
         );
       }
       const subtotal = Number(items.reduce((sum, item) => sum + item.priceUsd * item.quantity, 0).toFixed(2));
-      const orderTotal = Number((subtotal - pointsUsdDiscount).toFixed(2));
+      const orderTotal = Number((subtotal - pointsUsdDiscount + SERVICE_FEE_USD).toFixed(2));
       if (!Number.isFinite(orderTotal) || orderTotal <= 0) {
         throw new Error('El total del pedido no es válido.');
       }
@@ -1598,9 +1612,10 @@ export default function App() {
         items,
         subtotal,
         discount: pointsUsdDiscount,
+        service_fee_usd: SERVICE_FEE_USD,
         order_total: orderTotal,
         bcv_rate: Number(checkoutBcvRate.toFixed(4)),
-        total_bs: Math.ceil(orderTotal * checkoutBcvRate),
+        total_bs: Number((orderTotal * checkoutBcvRate).toFixed(2)),
         payment_proof_path: paymentProofPath,
       };
       const salesRows = Array.from(totalsByVariant.entries()).map(([variantId, total]) => ({
@@ -2993,15 +3008,36 @@ export default function App() {
 
               <div className="p-3 bg-purple-950/40 border border-purple-800/40 rounded-xl space-y-1 text-xs">
                 <div className="flex justify-between text-slate-300">
+                  <span>Subtotal del producto:</span>
+                  <span className="font-mono">${totalCartUsd.toFixed(2)} USD · {formatCheckoutBs(
+                    bcvRate === null ? null : Number((totalCartUsd * bcvRate).toFixed(2))
+                  )} Bs.</span>
+                </div>
+                {pointsUsdDiscount > 0 && (
+                  <div className="flex justify-between text-emerald-300">
+                    <span>Descuento Gamer Cash Points:</span>
+                    <span className="font-mono">-${pointsUsdDiscount.toFixed(2)} USD · {formatCheckoutBs(
+                      bcvRate === null ? null : Number((pointsUsdDiscount * bcvRate).toFixed(2))
+                    )} Bs.</span>
+                  </div>
+                )}
+                <div className="flex justify-between text-slate-300">
+                  <span>Gastos de Gestión:</span>
+                  <span className="font-mono">${SERVICE_FEE_USD.toFixed(2)} USD · {formatCheckoutBs(serviceFeeBs)} Bs.</span>
+                </div>
+                <p className="text-[10px] leading-4 text-slate-400">
+                  Este cargo cubre el procesamiento digital, el soporte y la administración de tu compra.
+                </p>
+                <div className="flex justify-between text-slate-200 font-semibold">
                   <span>Total Final USD:</span>
-                  <span className="font-mono font-bold">${finalCheckoutUsd.toFixed(2)} USD</span>
+                  <span className="font-mono">${checkoutTotalUsd.toFixed(2)} USD</span>
                 </div>
                 <div className="flex justify-between text-cyan-300 font-bold">
-                  <span>{checkoutForm.paymentMethod === 'binance' ? 'Monto a enviar:' : 'Monto Pago Móvil:'}</span>
+                  <span>{checkoutForm.paymentMethod === 'binance' ? 'Monto a enviar:' : 'Total Final a Transferir:'}</span>
                   <span className="font-mono">
                     {checkoutForm.paymentMethod === 'binance'
-                      ? `${finalCheckoutUsd.toFixed(2)} USDT`
-                      : `${calculateBs(finalCheckoutUsd)} Bs.`}
+                      ? `${checkoutTotalUsd.toFixed(2)} USDT`
+                      : `${formatCheckoutBs(checkoutTotalBs)} Bs.`}
                   </span>
                 </div>
               </div>
@@ -3053,9 +3089,21 @@ export default function App() {
 
             {cart.length > 0 && (
               <div className="pt-4 border-t border-slate-800 space-y-3">
+                <div className="space-y-1 text-xs">
+                  <div className="flex justify-between text-slate-400">
+                    <span>Subtotal del producto</span>
+                    <span className="font-mono">${totalCartUsd.toFixed(2)} USD</span>
+                  </div>
+                  <div className="flex justify-between text-slate-400">
+                    <span>Gastos de Gestión</span>
+                    <span className="font-mono">${SERVICE_FEE_USD.toFixed(2)} USD</span>
+                  </div>
+                </div>
                 <div className="flex justify-between text-base font-black text-white">
                   <span>Total a Pagar</span>
-                  <span className="font-mono text-cyan-300">{calculateBs(totalCartUsd)} Bs.</span>
+                  <span className="font-mono text-cyan-300">
+                    ${cartTotalUsdWithServiceFee.toFixed(2)} USD · {formatCheckoutBs(cartTotalBsWithServiceFee)} Bs.
+                  </span>
                 </div>
                 <button 
                   onClick={() => { setIsCartOpen(false); setCheckoutError(null); setIsCheckoutOpen(true); }}
