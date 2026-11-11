@@ -1,6 +1,7 @@
 'use client';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useRouter } from 'next/navigation';
+import type { User as SupabaseUser } from '@supabase/supabase-js';
 import { getSupabaseBrowserClient } from '../lib/supabase/browser';
 import { isAdminUser } from '../lib/supabase/admin';
 import { 
@@ -592,6 +593,23 @@ const FEATURED_OFFERS = [
 const FEATURED_OFFER_INTERVALS = [5000, 55000, 105000];
 const BCV_RATE_CACHE_KEY = 'lacasitagamer:bcv-rate';
 
+function getCustomerProfile(user: SupabaseUser | null) {
+  const metadata = user?.user_metadata ?? {};
+  const fullName = typeof metadata.full_name === 'string'
+    ? metadata.full_name
+    : typeof metadata.name === 'string' ? metadata.name : '';
+  const firstName = typeof metadata.first_name === 'string' ? metadata.first_name : '';
+  const lastName = typeof metadata.last_name === 'string' ? metadata.last_name : '';
+
+  return {
+    email: user?.email ?? '',
+    name: fullName || [firstName, lastName].filter(Boolean).join(' '),
+    phone: typeof user?.phone === 'string' && user.phone
+      ? user.phone
+      : typeof metadata.phone === 'string' ? metadata.phone : '',
+  };
+}
+
 type SupplierComparisonResult = {
   variant_id: string;
   comparisons: Array<{
@@ -768,6 +786,8 @@ export default function App() {
   const [adminOrdersLoading, setAdminOrdersLoading] = useState(false);
   const [adminOrdersError, setAdminOrdersError] = useState<string | null>(null);
   const [customerAuthEmail, setCustomerAuthEmail] = useState<string | null>(null);
+  const [customerAuthUser, setCustomerAuthUser] = useState<SupabaseUser | null>(null);
+  const [isCustomerAuthLoading, setIsCustomerAuthLoading] = useState(true);
   const [customerPassword, setCustomerPassword] = useState('');
   const [profileMessage, setProfileMessage] = useState<string | null>(null);
   const [isUpdatingPassword, setIsUpdatingPassword] = useState(false);
@@ -960,12 +980,27 @@ export default function App() {
 
     try {
       const supabase = getSupabaseBrowserClient();
+      supabase.auth.getUser().then(({ data, error }) => {
+        if (error) {
+          console.error('Error al obtener el usuario autenticado:', error);
+          return;
+        }
+        if (!active) return;
+        setCustomerAuthUser(data.user);
+        setCustomerAuthEmail(data.user?.email ?? null);
+      }).catch((error) => {
+        console.error('No se pudo obtener el usuario autenticado:', error);
+      }).finally(() => {
+        if (active) setIsCustomerAuthLoading(false);
+      });
+
       supabase.auth.getSession().then(({ data, error }) => {
         if (error) {
           console.error('Error al restaurar la sesión de administración:', error);
           return;
         }
         if (active) {
+          setCustomerAuthUser(data.session?.user ?? null);
           setCustomerAuthEmail(data.session?.user.email ?? null);
         }
         if (active && new URLSearchParams(window.location.search).get('tab') === 'admin') {
@@ -982,6 +1017,7 @@ export default function App() {
 
       const { data } = supabase.auth.onAuthStateChange((_event, session) => {
         if (!active) return;
+        setCustomerAuthUser(session?.user ?? null);
         setCustomerAuthEmail(session?.user.email ?? null);
         const isAdmin = isAdminUser(session?.user);
         setIsAdminAuthenticated(Boolean(isAdmin));
@@ -997,6 +1033,46 @@ export default function App() {
       unsubscribe();
     };
   }, []);
+
+  useEffect(() => {
+    if (!isCheckoutOpen) return;
+
+    let active = true;
+    setIsCustomerAuthLoading(true);
+    let supabase: ReturnType<typeof getSupabaseBrowserClient>;
+    try {
+      supabase = getSupabaseBrowserClient();
+    } catch (error) {
+      console.error('No se pudo inicializar Supabase para verificar el checkout:', error);
+      setIsCustomerAuthLoading(false);
+      return () => { active = false; };
+    }
+
+    supabase.auth.getUser()
+      .then(({ data, error }) => {
+        if (error) throw error;
+        if (!active) return;
+        setCustomerAuthUser(data.user);
+        setCustomerAuthEmail(data.user?.email ?? null);
+        if (data.user) {
+          const profile = getCustomerProfile(data.user);
+          setCheckoutForm((current) => ({
+            ...current,
+            email: profile.email || current.email,
+            name: profile.name || current.name,
+            phone: profile.phone || current.phone,
+          }));
+        }
+      })
+      .catch((error) => {
+        if (active) console.error('No se pudo verificar la sesión para el checkout:', error);
+      })
+      .finally(() => {
+        if (active) setIsCustomerAuthLoading(false);
+      });
+
+    return () => { active = false; };
+  }, [isCheckoutOpen]);
 
   useEffect(() => {
     if (!isAdminAuthenticated || activeTab !== 'admin' || adminTab !== 'sales') return;
@@ -1253,6 +1329,15 @@ export default function App() {
   }, [usePointsInCheckout, gamerPoints, totalCartUsd]);
 
   const finalCheckoutUsd = useMemo(() => Math.max(0, totalCartUsd - pointsUsdDiscount), [totalCartUsd, pointsUsdDiscount]);
+  const authenticatedCustomer = getCustomerProfile(customerAuthUser);
+  const checkoutCustomer = {
+    email: authenticatedCustomer.email || checkoutForm.email,
+    name: authenticatedCustomer.name || checkoutForm.name,
+    phone: authenticatedCustomer.phone || checkoutForm.phone,
+  };
+  const shouldCollectCustomerDetails = !customerAuthUser
+    || !authenticatedCustomer.name
+    || !authenticatedCustomer.phone;
 
   const handleVariantSelect = (gameId, variantId) => {
     setSelectedVariants(prev => ({ ...prev, [gameId]: variantId }));
@@ -1411,6 +1496,9 @@ export default function App() {
   const handleProcessOrder = async (e) => {
     e.preventDefault();
     setCheckoutError(null);
+    const customerEmail = checkoutCustomer.email.trim();
+    const customerName = checkoutCustomer.name.trim();
+    const customerPhone = checkoutCustomer.phone.trim();
     if (!['pago_movil', 'binance'].includes(checkoutForm.paymentMethod)) {
       setCheckoutError('Selecciona un método de pago válido.');
       return;
@@ -1424,10 +1512,10 @@ export default function App() {
       return;
     }
     if (
-      !checkoutForm.email
-      || !checkoutForm.name
-      || !checkoutForm.phone
-      || !/^[+0-9()\-\s]{7,25}$/.test(checkoutForm.phone.trim())
+      !customerEmail
+      || !customerName
+      || !customerPhone
+      || !/^[+0-9()\-\s]{7,25}$/.test(customerPhone)
       || (checkoutForm.paymentMethod === 'pago_movil'
         && (checkoutForm.bankName.trim().length < 2 || checkoutForm.bankName.trim().length > 100))
       || !checkoutForm.referenceNumber
@@ -1503,9 +1591,9 @@ export default function App() {
         throw new Error('El total del pedido no es válido.');
       }
       const customerInfo = {
-        email: checkoutForm.email.trim().toLowerCase(),
-        phone: checkoutForm.phone.trim(),
-        name: checkoutForm.name.trim(),
+        email: customerEmail.toLowerCase(),
+        phone: customerPhone,
+        name: customerName,
         bank_name: checkoutForm.paymentMethod === 'binance' ? 'Binance' : checkoutForm.bankName.trim(),
         items,
         subtotal,
@@ -1542,8 +1630,8 @@ export default function App() {
           quantity: item.quantity,
           priceUsd: item.priceUsd,
         })),
-        name: checkoutForm.name,
-        email: checkoutForm.email,
+        name: customerName,
+        email: customerEmail,
         submittedAt: Date.now(),
       };
       try {
@@ -1551,10 +1639,10 @@ export default function App() {
       } catch (storageError) {
         console.error('No se pudo guardar el resumen local de confirmación.', storageError);
       }
-      if (customerAuthEmail?.toLowerCase() !== checkoutForm.email.trim().toLowerCase()) {
+      if (customerAuthEmail?.toLowerCase() !== customerEmail.toLowerCase()) {
         try {
           void getSupabaseBrowserClient().auth.signInWithOtp({
-            email: checkoutForm.email.trim(),
+            email: customerEmail,
             options: {
               emailRedirectTo: `${window.location.origin}/checkout/success?orderId=${encodeURIComponent(orderId)}`,
             },
@@ -1566,6 +1654,23 @@ export default function App() {
         } catch (error) {
           console.error('El pedido se guardó, pero no se pudo iniciar el envío del enlace de acceso.', error);
         }
+      }
+      if (customerAuthUser && (!authenticatedCustomer.name || !authenticatedCustomer.phone)) {
+        void supabase.auth.updateUser({
+          data: {
+            ...customerAuthUser.user_metadata,
+            full_name: customerName,
+            phone: customerPhone,
+          },
+        }).then(({ data, error }) => {
+          if (error) {
+            console.error('El pedido se guardó, pero no se pudo actualizar el perfil del cliente.', error);
+            return;
+          }
+          setCustomerAuthUser(data.user);
+        }).catch((error) => {
+          console.error('El pedido se guardó, pero no se pudo actualizar el perfil del cliente.', error);
+        });
       }
       checkoutRequestKey.current = null;
       setCart([]);
@@ -2692,7 +2797,9 @@ export default function App() {
               <h2 className="text-xl font-extrabold text-white flex items-center gap-2">
                 <ShieldCheck className="w-6 h-6 text-emerald-400" /> Checkout Sin Contraseña
               </h2>
-              <p className="text-xs text-slate-400">Ingresa tus datos y reporta tu Pago Móvil.</p>
+              <p className="text-xs text-slate-400">
+                {customerAuthUser ? 'Confirma tu método de pago y referencia.' : 'Ingresa tus datos y reporta tu Pago Móvil.'}
+              </p>
             </div>
 
             {checkoutError && (
@@ -2702,45 +2809,66 @@ export default function App() {
             )}
 
             <form onSubmit={handleProcessOrder} className="space-y-4">
-              <div className="space-y-3 bg-slate-900/60 p-3.5 rounded-xl border border-slate-800">
-                <h3 className="text-xs font-bold text-purple-300 uppercase tracking-wider">1. Datos del Cliente</h3>
-                <div>
-                  <label className="block text-[11px] text-slate-300 mb-1">Nombre completo</label>
-                  <input
-                    type="text"
-                    required
-                    minLength={2}
-                    maxLength={120}
-                    autoComplete="name"
-                    placeholder="Tu nombre y apellido"
-                    value={checkoutForm.name}
-                    onChange={(e) => updateCheckoutForm('name', e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-xs text-white focus:border-purple-500 focus:outline-none"
-                  />
+              {isCustomerAuthLoading ? (
+                <p role="status" className="rounded-xl border border-slate-800 bg-slate-900/60 p-3.5 text-xs text-slate-300">
+                  Verificando tu sesión…
+                </p>
+              ) : customerAuthUser && !shouldCollectCustomerDetails ? (
+                <p className="rounded-xl border border-emerald-500/20 bg-emerald-950/20 p-3.5 text-xs text-emerald-200">
+                  Datos de la cuenta: <strong>{authenticatedCustomer.name}</strong> · {authenticatedCustomer.email} · {authenticatedCustomer.phone}
+                </p>
+              ) : (
+                <div className="space-y-3 rounded-xl border border-slate-800 bg-slate-900/60 p-3.5">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-purple-300">
+                    {customerAuthUser ? 'Completa los datos de contacto faltantes' : '1. Datos del Cliente'}
+                  </h3>
+                  {(!customerAuthUser || !authenticatedCustomer.name) && (
+                    <div>
+                      <label className="mb-1 block text-[11px] text-slate-300">Nombre completo</label>
+                      <input
+                        type="text"
+                        required
+                        minLength={2}
+                        maxLength={120}
+                        autoComplete="name"
+                        placeholder="Tu nombre y apellido"
+                        value={checkoutForm.name}
+                        onChange={(e) => updateCheckoutForm('name', e.target.value)}
+                        className="w-full rounded-lg border border-slate-700 bg-slate-950 p-2 text-xs text-white focus:border-purple-500 focus:outline-none"
+                      />
+                    </div>
+                  )}
+                  {!customerAuthUser && (
+                    <div>
+                      <label className="mb-1 block text-[11px] text-slate-300">Email (Recepción de Keys)</label>
+                      <input
+                        type="email"
+                        required
+                        placeholder="tu_email@gmail.com"
+                        value={checkoutForm.email}
+                        onChange={(e) => updateCheckoutForm('email', e.target.value)}
+                        className="w-full rounded-lg border border-slate-700 bg-slate-950 p-2 text-xs text-white focus:border-purple-500 focus:outline-none"
+                      />
+                    </div>
+                  )}
+                  {(!customerAuthUser || !authenticatedCustomer.phone) && (
+                    <div>
+                      <label className="mb-1 block text-[11px] text-slate-300">WhatsApp</label>
+                      <input
+                        type="tel"
+                        required
+                        placeholder="0412-1234567"
+                        value={checkoutForm.phone}
+                        onChange={(e) => updateCheckoutForm('phone', e.target.value)}
+                        className="w-full rounded-lg border border-slate-700 bg-slate-950 p-2 text-xs text-white focus:border-purple-500 focus:outline-none"
+                      />
+                    </div>
+                  )}
+                  {customerAuthUser && (
+                    <p className="text-[11px] text-slate-400">Correo de la cuenta: {authenticatedCustomer.email}</p>
+                  )}
                 </div>
-                <div>
-                  <label className="block text-[11px] text-slate-300 mb-1">Email (Recepción de Keys)</label>
-                  <input 
-                    type="email" 
-                    required
-                    placeholder="tu_email@gmail.com"
-                    value={checkoutForm.email}
-                    onChange={(e) => updateCheckoutForm('email', e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-xs text-white focus:border-purple-500 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[11px] text-slate-300 mb-1">WhatsApp</label>
-                  <input 
-                    type="tel" 
-                    required
-                    placeholder="0412-1234567"
-                    value={checkoutForm.phone}
-                    onChange={(e) => updateCheckoutForm('phone', e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-xs text-white focus:border-purple-500 focus:outline-none"
-                  />
-                </div>
-              </div>
+              )}
 
               {/* OPCIÓN DESCUENTO POR PUNTOS GAMER CASH */}
               {gamerPoints > 0 && (
