@@ -592,8 +592,6 @@ const FEATURED_OFFERS = [
 ];
 
 const FEATURED_OFFER_INTERVALS = [5000, 55000, 105000];
-const BCV_RATE_CACHE_KEY = 'lacasitagamer:bcv-rate';
-
 function getCustomerProfile(user: SupabaseUser | null) {
   const metadata = user?.user_metadata ?? {};
   const fullName = typeof metadata.full_name === 'string'
@@ -851,21 +849,6 @@ export default function App() {
     let active = true;
     let activeRequest: AbortController | null = null;
 
-    try {
-      const cachedValue = window.localStorage.getItem(BCV_RATE_CACHE_KEY);
-      if (cachedValue) {
-        const cached = JSON.parse(cachedValue);
-        const cachedRate = Number(cached?.rate);
-        if (Number.isFinite(cachedRate) && cachedRate > 0) {
-          setBcvRate(cachedRate);
-          setIsBcvRateFromCache(true);
-          setIsBcvRateLoading(false);
-        }
-      }
-    } catch (error) {
-      console.warn('No se pudo leer la tasa BCV guardada localmente:', error);
-    }
-
     const fetchBcvRate = async () => {
       const requestController = new AbortController();
       activeRequest = requestController;
@@ -901,14 +884,6 @@ export default function App() {
             : null
         );
         setIsBcvRateLoading(false);
-        try {
-          window.localStorage.setItem(BCV_RATE_CACHE_KEY, JSON.stringify({
-            rate,
-            savedAt: new Date().toISOString(),
-          }));
-        } catch (error) {
-          console.warn('No se pudo guardar la tasa BCV en caché local:', error);
-        }
       } catch (error) {
         if (!active || requestController.signal.aborted && activeRequest !== requestController) return;
         setBcvRateError(

@@ -1,7 +1,6 @@
 import { getSupabaseServerClient } from '../supabase/server';
 
 const MONTOSVE_RATES_URL = 'https://api.montosve.com/v1/fx/rates';
-const BCV_RATE_SOURCE = 'bcv_official_ves';
 const SOURCE_TIMEOUT_MS = 6000;
 const BCV_RATE_CACHE_SECONDS = 12 * 60 * 60;
 const BCV_RATE_CACHE_MS = BCV_RATE_CACHE_SECONDS * 1000;
@@ -111,7 +110,7 @@ export async function getStoredBcvRate(): Promise<StoredRate | null> {
   const supabase = getSupabaseServerClient();
   let pricingReadError: string | null = null;
   let exchangeRate: { rate: number | string; updated_at: string } | null = null;
-  let currencyLookupError: string | null = null;
+  let exchangeRateLookupError: string | null = null;
 
   try {
     const { data, error } = await supabase
@@ -125,28 +124,8 @@ export async function getStoredBcvRate(): Promise<StoredRate | null> {
     if (error) throw error;
     exchangeRate = data;
   } catch (error) {
-    currencyLookupError = errorMessage(error);
-    console.warn(
-      `[bcv][stored-rate:exchange_rates.currency] No se pudo consultar currency='USD'; se probará el esquema source: ${currencyLookupError}`
-    );
-  }
-
-  if (!exchangeRate) {
-    try {
-      const { data, error } = await supabase
-        .from('exchange_rates')
-        .select('rate, updated_at')
-        .eq('source', BCV_RATE_SOURCE)
-        .maybeSingle();
-
-      if (error) throw error;
-      exchangeRate = data;
-    } catch (error) {
-      currencyLookupError = [
-        currencyLookupError,
-        `source: ${errorMessage(error)}`,
-      ].filter(Boolean).join('; ');
-    }
+    exchangeRateLookupError = errorMessage(error);
+    console.warn('[bcv][stored-rate:exchange_rates] No se pudo consultar la tasa USD más reciente:', error);
   }
 
   if (exchangeRate) {
@@ -183,7 +162,7 @@ export async function getStoredBcvRate(): Promise<StoredRate | null> {
   }
 
   throw new Error(
-    `No existe tasa válida en exchange_rates (${currencyLookupError ?? 'sin fila'}); respaldo product_pricing (${pricingReadError ?? 'sin tasa válida'}).`
+    `No existe tasa válida en exchange_rates (${exchangeRateLookupError ?? 'sin fila'}); respaldo product_pricing (${pricingReadError ?? 'sin tasa válida'}).`
   );
 }
 
