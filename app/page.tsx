@@ -1465,39 +1465,79 @@ export default function App() {
         throw new Error('No hay una tasa BCV válida para registrar el pedido.');
       }
 
-      const orderForm = new FormData();
-      orderForm.set('idempotencyKey', checkoutRequestKey.current ?? (checkoutRequestKey.current = crypto.randomUUID()));
-      orderForm.set('email', checkoutForm.email);
-      orderForm.set('name', checkoutForm.name);
-      orderForm.set('phone', checkoutForm.phone);
-      orderForm.set('paymentMethod', checkoutForm.paymentMethod);
-      orderForm.set('bankName', checkoutForm.paymentMethod === 'binance' ? 'Binance' : checkoutForm.bankName);
-      orderForm.set('referenceNumber', checkoutForm.referenceNumber);
-      orderForm.set('discountUsd', String(pointsUsdDiscount));
-      orderForm.set('bcvRate', String(checkoutBcvRate));
-      orderForm.set('items', JSON.stringify(cart.map((item) => ({
-        name: `${item.title} (${item.platform})`,
-        variantId: item.variantId,
-        gameId: item.gameId,
-        priceUsd: item.priceUsd,
-        quantity: item.quantity,
-      }))));
-      if (paymentProofFile) orderForm.set('paymentProof', paymentProofFile);
+      const supabase = getSupabaseBrowserClient();
+      const orderId = checkoutRequestKey.current ?? (checkoutRequestKey.current = crypto.randomUUID());
+      let paymentProofPath: string | null = null;
+      if (paymentProofFile) {
+        const extension = paymentProofFile.type === 'image/jpeg'
+          ? 'jpg'
+          : paymentProofFile.type === 'image/png' ? 'png' : 'webp';
+        paymentProofPath = `${orderId}/${crypto.randomUUID()}.${extension}`;
+        const { error: uploadError } = await supabase.storage
+          .from('payment-proofs')
+          .upload(paymentProofPath, paymentProofFile, {
+            cacheControl: '0',
+            contentType: paymentProofFile.type,
+            upsert: false,
+          });
+        if (uploadError) throw uploadError;
+      }
 
-      const response = await fetch('/api/sales', {
-        method: 'POST',
-        cache: 'no-store',
-        body: orderForm,
-      });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error ?? 'No se pudo registrar el pedido.');
-      if (typeof result.orderId !== 'string') {
-        throw new Error('El servidor no devolvió la confirmación del pedido.');
+      const items = cart.map((item) => ({
+        name: `${item.title} (${item.platform})`,
+        variantId: String(item.variantId),
+        gameId: item.gameId,
+        priceUsd: Number(item.priceUsd),
+        quantity: item.quantity,
+      }));
+      const totalsByVariant = new Map<string, number>();
+      for (const item of items) {
+        totalsByVariant.set(
+          item.variantId,
+          (totalsByVariant.get(item.variantId) ?? 0) + item.priceUsd * item.quantity
+        );
+      }
+      const subtotal = Number(items.reduce((sum, item) => sum + item.priceUsd * item.quantity, 0).toFixed(2));
+      const orderTotal = Number((subtotal - pointsUsdDiscount).toFixed(2));
+      if (!Number.isFinite(orderTotal) || orderTotal <= 0) {
+        throw new Error('El total del pedido no es válido.');
+      }
+      const customerInfo = {
+        email: checkoutForm.email.trim().toLowerCase(),
+        phone: checkoutForm.phone.trim(),
+        name: checkoutForm.name.trim(),
+        bank_name: checkoutForm.paymentMethod === 'binance' ? 'Binance' : checkoutForm.bankName.trim(),
+        items,
+        subtotal,
+        discount: pointsUsdDiscount,
+        order_total: orderTotal,
+        bcv_rate: Number(checkoutBcvRate.toFixed(4)),
+        total_bs: Math.ceil(orderTotal * checkoutBcvRate),
+        payment_proof_path: paymentProofPath,
+      };
+      const salesRows = Array.from(totalsByVariant.entries()).map(([variantId, total]) => ({
+        order_id: orderId,
+        variant_id: String(variantId),
+        total: Number(total.toFixed(2)),
+        payment_method: checkoutForm.paymentMethod,
+        payment_reference: checkoutForm.referenceNumber.trim(),
+        customer_info: customerInfo,
+        status: 'pendiente',
+      }));
+      const insert = supabase.from('sales').insert(salesRows).select('id, order_id');
+      const { data, error } = salesRows.length === 1 ? await insert.single() : await insert;
+      if (error) {
+        console.error('Error detallado al insertar la venta en Supabase:', error);
+        throw new Error(error.message);
+      }
+      const insertedRows = Array.isArray(data) ? data : data ? [data] : [];
+      if (insertedRows.length !== salesRows.length || insertedRows[0]?.order_id !== orderId) {
+        throw new Error('Supabase no devolvió la confirmación completa del pedido.');
       }
 
       const confirmation = {
-        items: cart.map((item) => ({
-          name: `${item.title} (${item.platform})`,
+        items: items.map((item) => ({
+          name: item.name,
           variantId: item.variantId,
           quantity: item.quantity,
           priceUsd: item.priceUsd,
@@ -1507,7 +1547,7 @@ export default function App() {
         submittedAt: Date.now(),
       };
       try {
-        sessionStorage.setItem(`checkout-success-${result.orderId}`, JSON.stringify(confirmation));
+        sessionStorage.setItem(`checkout-success-${orderId}`, JSON.stringify(confirmation));
       } catch (storageError) {
         console.error('No se pudo guardar el resumen local de confirmación.', storageError);
       }
@@ -1516,7 +1556,7 @@ export default function App() {
           void getSupabaseBrowserClient().auth.signInWithOtp({
             email: checkoutForm.email.trim(),
             options: {
-              emailRedirectTo: `${window.location.origin}/checkout/success?orderId=${encodeURIComponent(result.orderId)}`,
+              emailRedirectTo: `${window.location.origin}/checkout/success?orderId=${encodeURIComponent(orderId)}`,
             },
           }).then(({ error }) => {
             if (error) console.error('El pedido se guardó, pero no se pudo enviar el enlace de acceso.', error);
@@ -1532,7 +1572,7 @@ export default function App() {
       setUsePointsInCheckout(false);
       setPaymentProofFile(null);
       setIsCheckoutOpen(false);
-      router.push(`/checkout/success?orderId=${encodeURIComponent(result.orderId)}`);
+      router.push(`/checkout/success?orderId=${encodeURIComponent(orderId)}`);
     } catch (error) {
       const message = error instanceof Error
         ? error.message
