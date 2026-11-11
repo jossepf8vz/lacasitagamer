@@ -38,6 +38,7 @@ type SupplierCheck = {
   supplier: SupplierName;
   source_url: string;
   price_usd: number | null;
+  final_price_usd: number | null;
   seller_name: string | null;
   offer_url: string | null;
   error: string | null;
@@ -158,6 +159,7 @@ export async function GET(request: Request) {
             supplier: supplier.supplier,
             source_url: supplier.url,
             price_usd: offer.priceUsd,
+            final_price_usd: Number((offer.priceUsd * (1 + PROFIT_MARGIN_PERCENT / 100)).toFixed(2)),
             seller_name: offer.sellerName,
             offer_url: offer.offerUrl,
             error: null,
@@ -171,6 +173,7 @@ export async function GET(request: Request) {
             supplier: supplier.supplier,
             source_url: supplier.url,
             price_usd: null,
+            final_price_usd: null,
             seller_name: null,
             offer_url: null,
             error: message,
@@ -193,6 +196,7 @@ export async function GET(request: Request) {
               supplier: result.supplier,
               source_url: result.source_url,
               price_usd: result.price_usd,
+              final_price_usd: result.final_price_usd,
               seller_name: result.seller_name,
               offer_url: result.offer_url,
               error: result.error,
@@ -208,9 +212,9 @@ export async function GET(request: Request) {
     }
 
     const availableBest = results.reduce<SupplierCheck | null>(
-      (currentBest, current) => current.price_usd === null
+      (currentBest, current) => current.final_price_usd === null
         ? currentBest
-        : currentBest === null || current.price_usd < currentBest.price_usd
+        : currentBest === null || current.final_price_usd < currentBest.final_price_usd!
           ? current
           : currentBest,
       null
@@ -228,11 +232,11 @@ export async function GET(request: Request) {
     let finalPriceBs: number | null = null;
     let profitMarginPercent: number | null = null;
 
-    if (best && bcvRate !== null) {
+    if (best) {
       try {
         profitMarginPercent = PROFIT_MARGIN_PERCENT;
-        finalPriceUsd = Number((best.price_usd! * 1.33).toFixed(2));
-        finalPriceBs = Number((finalPriceUsd * bcvRate).toFixed(2));
+        finalPriceUsd = best.final_price_usd!;
+        if (bcvRate !== null) finalPriceBs = Number((finalPriceUsd * bcvRate).toFixed(2));
         if (!supabase) {
           warnings.push('Supabase no está disponible; no se pudo persistir el precio calculado.');
         } else {
@@ -240,23 +244,28 @@ export async function GET(request: Request) {
             .from('product_pricing')
             .upsert({
               variant_id: VARIANT_ID,
+              current_supplier: best.supplier,
+              current_seller_name: best.seller_name,
+              current_offer_url: best.offer_url,
+              current_cost_usd: best.price_usd,
               applied_margin_percent: PROFIT_MARGIN_PERCENT,
-              bcv_rate: bcvRate,
               final_price_usd: finalPriceUsd,
-              final_price_bs: finalPriceBs,
+              ...(bcvRate !== null ? { bcv_rate: bcvRate, final_price_bs: finalPriceBs } : {}),
               updated_at: new Date().toISOString(),
             }, { onConflict: 'variant_id' });
           if (pricingErr) throw pricingErr;
+        }
+        if (bcvRate === null) {
+          warnings.push('El precio ganador en USD se guardó, pero no se pudo actualizar su conversión a bolívares.');
+          console.error('[cron/test-steam][calculation] Se guardó el precio USD sin conversión por falta de tasa BCV.');
         }
       } catch (error) {
         const message = getErrorMessage(error, 'No se pudo guardar el precio calculado.');
         warnings.push(`No se pudo persistir el precio calculado: ${message}`);
         console.error('[cron/test-steam][price-save] Falló la actualización de precio/margen/BCV:', error);
       }
-    } else if (!best) {
+    } else {
       console.error('[cron/test-steam][calculation] Sin comparación completa; no se calcula el precio final.');
-    } else if (bcvRate === null) {
-      console.error('[cron/test-steam][calculation] Falta una tasa BCV válida para la conversión.');
     }
 
     return jsonResponse({
@@ -276,6 +285,7 @@ export async function GET(request: Request) {
       comparisons: results.map((result) => ({
         provider: PROVIDER_NAMES[result.supplier],
         price_usd: result.price_usd,
+        final_price_usd: result.final_price_usd,
         seller_name: result.seller_name,
         offer_url: result.offer_url,
         status: result.price_usd === null ? 'no disponible' : 'disponible',

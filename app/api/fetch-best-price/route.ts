@@ -12,6 +12,7 @@ type SupplierRow = {
 
 type SupplierResult = SupplierRow & {
   price_usd: number | null;
+  final_price_usd: number | null;
   seller_name: string | null;
   offer_url: string | null;
   error: string | null;
@@ -68,6 +69,9 @@ export async function POST(request: Request) {
         return {
           ...supplier,
           price_usd: priceUsd,
+          final_price_usd: priceUsd === null
+            ? null
+            : Number((priceUsd * (1 + Number(pricing.profit_margin_percent) / 100)).toFixed(2)),
           seller_name: offer?.sellerName ?? null,
           offer_url: offer?.offerUrl ?? supplier.url,
           error: null,
@@ -76,6 +80,7 @@ export async function POST(request: Request) {
         return {
           ...supplier,
           price_usd: null,
+          final_price_usd: null,
           seller_name: null,
           offer_url: null,
           error: error instanceof Error ? error.message : 'Error desconocido consultando al proveedor.',
@@ -85,32 +90,28 @@ export async function POST(request: Request) {
 
     const { error: saveError } = await supabase
       .from('supplier_price_checks')
-      .upsert(
+      .insert(
         results.map((result) => ({
           variant_id: body.variantId,
           supplier: result.supplier,
           source_url: result.url,
           price_usd: result.price_usd,
+          final_price_usd: result.final_price_usd,
           seller_name: result.seller_name,
           offer_url: result.offer_url,
           error: result.error,
           checked_at: new Date().toISOString(),
-        })),
-        { onConflict: 'variant_id,supplier' }
+        }))
       );
 
     if (saveError) throw saveError;
 
     const successfulPrices = results.filter((result) => result.price_usd !== null);
     const cheapest = successfulPrices.reduce<(typeof successfulPrices)[number] | null>(
-      (best, current) => !best || current.price_usd! < best.price_usd! ? current : best,
+      (best, current) => !best || current.final_price_usd! < best.final_price_usd! ? current : best,
       null
     );
-    const steamComparisonComplete = body.variantId !== 'v-s10-glo'
-      || (results.length === 2 && results.every((result) => result.price_usd !== null));
-    const baseCostUsd = body.variantId === 'v-s10-glo'
-      ? (steamComparisonComplete ? cheapest?.price_usd ?? null : null)
-      : cheapest?.price_usd ?? pricing.fallback_cost_usd;
+    const baseCostUsd = cheapest?.price_usd ?? (body.variantId === 'v-s10-glo' ? null : pricing.fallback_cost_usd);
     if (baseCostUsd === null) {
       return NextResponse.json({
         error: 'No se pudo leer ningún precio y no hay un costo de respaldo configurado.',
@@ -137,10 +138,10 @@ export async function POST(request: Request) {
       const { error: priceSaveError } = await supabase
         .from('product_pricing')
         .update({
+          current_cost_usd: cheapest.price_usd,
           current_supplier: cheapest.supplier,
           current_seller_name: cheapest.seller_name,
           current_offer_url: cheapest.offer_url,
-          current_cost_usd: cheapest.price_usd,
           final_price_usd: finalUsd,
           final_price_bs: finalBs,
           bcv_rate: rate,

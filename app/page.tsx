@@ -619,6 +619,7 @@ type SaleSupplierPrice = {
   offer_url?: string | null;
   seller_name?: string | null;
   price_usd: number | null;
+  final_price_usd?: number | null;
 };
 
 const SALE_SUPPLIERS = [
@@ -637,6 +638,25 @@ function getSupplierSearchUrl(supplier: typeof SALE_SUPPLIERS[number]['id'], pro
     case 'eldorado':
       return `https://www.eldorado.gg/search?query=${query}`;
   }
+}
+
+function getSupplierFinalPrice(comparison: SaleSupplierPrice | undefined) {
+  if (!comparison || comparison.price_usd === null) return null;
+  return comparison.final_price_usd
+    ?? Number((comparison.price_usd * 1.33).toFixed(2));
+}
+
+function getRecommendedSupplier(prices: SaleSupplierPrice[]) {
+  return prices
+    .filter((price) => ['eneba', 'g2a'].includes(price.supplier.toLowerCase()) && price.price_usd !== null)
+    .reduce<SaleSupplierPrice | null>((best, current) => {
+      const currentFinalPrice = getSupplierFinalPrice(current);
+      const bestFinalPrice = getSupplierFinalPrice(best ?? undefined);
+      return currentFinalPrice !== null
+        && (bestFinalPrice === null || currentFinalPrice < bestFinalPrice)
+        ? current
+        : best;
+    }, null);
 }
 
 function RecentActivityNotification({
@@ -758,6 +778,8 @@ export default function App() {
   const [supplierComparisonError, setSupplierComparisonError] = useState<string | null>(null);
   const [isRefreshingSupplierPrices, setIsRefreshingSupplierPrices] = useState(false);
   const [saleSupplierPrices, setSaleSupplierPrices] = useState<Record<string, SaleSupplierPrice[]>>({});
+  const steamSupplierPrices = saleSupplierPrices['v-s10-glo'] ?? [];
+  const recommendedSteamSupplier = getRecommendedSupplier(steamSupplierPrices);
 
   // Formulario Checkout
   const [checkoutForm, setCheckoutForm] = useState({
@@ -1006,7 +1028,7 @@ export default function App() {
     let active = true;
     const controller = new AbortController();
     const variantIds = Array.from(new Set(
-      adminSalesHistory.flatMap((sale) => sale.items.map((item) => item.variantId))
+      ['v-s10-glo', ...adminSalesHistory.flatMap((sale) => sale.items.map((item) => item.variantId))]
     ));
 
     const loadSaleSupplierPrices = async () => {
@@ -1597,6 +1619,70 @@ export default function App() {
                 <h2 className="text-lg font-bold text-white flex items-center gap-2">
                   <CheckCircle2 className="w-5 h-5 text-emerald-400" /> Ventas Registradas y Recomendación de Compra por Proveedor
                 </h2>
+
+                <section className="rounded-2xl border border-purple-500/30 bg-slate-950 p-4">
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <h3 className="font-bold text-white">Steam Gift Card $10 — comparación Eneba vs G2A</h3>
+                      <p className="text-xs text-slate-400">Precios actuales consultados en paralelo; el precio final incluye margen del 33%.</p>
+                    </div>
+                    {recommendedSteamSupplier && (
+                      <span className="rounded-full border border-emerald-400/40 bg-emerald-500/15 px-3 py-1 text-xs font-bold text-emerald-300">
+                        Mejor compra: {recommendedSteamSupplier.supplier.toUpperCase()}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {SALE_SUPPLIERS.filter((supplier) => supplier.id === 'eneba' || supplier.id === 'g2a').map((supplier) => {
+                      const comparison = steamSupplierPrices.find(
+                        (price) => price.supplier.toLowerCase() === supplier.id
+                      );
+                      const finalPrice = getSupplierFinalPrice(comparison);
+                      const isRecommended = comparison === recommendedSteamSupplier && comparison !== undefined;
+                      const offerUrl = comparison?.offer_url ?? comparison?.url
+                        ?? (supplier.id === 'eneba'
+                          ? 'https://www.eneba.com/latam/steam-gift-card-steam-wallet-gift-card-10-usd-steam-key-united-states'
+                          : 'https://www.g2a.com/es/steam-gift-card-10-usd-steam-key-global-i10000000258127');
+
+                      return (
+                        <article
+                          key={supplier.id}
+                          className={`rounded-xl border p-4 ${isRecommended ? 'border-emerald-400/60 bg-emerald-950/20' : 'border-slate-800 bg-slate-900/70'}`}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <h4 className="font-bold text-white">{supplier.name}</h4>
+                            {isRecommended && (
+                              <span className="rounded bg-emerald-500/20 px-2 py-0.5 text-[10px] font-bold text-emerald-300">
+                                MEJOR OPCIÓN DE COMPRA
+                              </span>
+                            )}
+                          </div>
+                          {comparison?.seller_name && (
+                            <p className="mt-1 text-xs text-slate-400">Vendedor: {comparison.seller_name}</p>
+                          )}
+                          <p className="mt-3 text-xs text-slate-400">Costo actual</p>
+                          <p className="font-mono text-lg text-cyan-200">
+                            {comparison?.price_usd == null ? 'No disponible' : `$${comparison.price_usd.toFixed(2)} USD`}
+                          </p>
+                          <p className="mt-2 text-xs text-slate-400">Precio calculado con margen del 33%</p>
+                          <p className="font-mono text-sm font-bold text-white">
+                            {finalPrice === null ? '—' : `$${finalPrice.toFixed(2)} USD`}
+                          </p>
+                          <a
+                            href={offerUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="mt-3 inline-flex items-center gap-1 text-xs text-purple-300 underline decoration-purple-500/50 underline-offset-2 hover:text-white"
+                          >
+                            Abrir oferta de {supplier.name}
+                            <ArrowUpRight className="h-3.5 w-3.5" aria-hidden="true" />
+                          </a>
+                        </article>
+                      );
+                    })}
+                  </div>
+                </section>
                 
                 <div className="space-y-4">
                   {adminSalesHistory.map(sale => (
