@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { refreshBcvRate } from '../../../../lib/pricing/bcv';
-import { fetchSupplierOffer, type SupplierName } from '../../../../lib/pricing/suppliers';
+import { fetchSupplierOffer, type SupplierName, type SupplierOffer } from '../../../../lib/pricing/suppliers';
 import { getSupabaseServerClient } from '../../../../lib/supabase/server';
 
 export const runtime = 'nodejs';
@@ -11,6 +11,15 @@ const VARIANT_ID = 'v-s10-glo';
 const PRODUCT_ID = 'g-steam-10';
 const PRODUCT_NAME = 'Steam Gift Card $10';
 const PROFIT_MARGIN_PERCENT = 33;
+const PSN_VARIANT_ID = 'v-ps10-us';
+const PSN_PRODUCT_ID = 'g-psn-10';
+const PSN_PRODUCT_NAME = 'PlayStation Network Card $10 USD (USA)';
+const PSN_STOCK = 80;
+const PSN_CATEGORY = 'PlayStation / Gift Cards';
+const PSN_SUPPLIER: SupplierRow = {
+  supplier: 'eneba',
+  url: 'https://www.eneba.com/latam/psn-playstation-network-card-10-usd-usa-psn-key-united-states',
+};
 const FALLBACK_SUPPLIERS: SupplierRow[] = [
   {
     supplier: 'eneba',
@@ -45,6 +54,19 @@ type SupplierCheck = {
   checked_at: string;
 };
 
+type PlayStationSyncResult = {
+  success: boolean;
+  product: string;
+  variant_id: string;
+  provider: string;
+  best_price_usd: number | null;
+  final_price_usd: number | null;
+  final_price_bs: number | null;
+  seller_name: string | null;
+  offer_url: string | null;
+  error?: string;
+};
+
 function jsonResponse(body: Record<string, unknown>) {
   return NextResponse.json(body, {
     status: 200,
@@ -58,6 +80,142 @@ function getErrorMessage(error: unknown, fallback: string): string {
     return error.message;
   }
   return fallback;
+}
+
+async function syncPlayStationPrice(
+  supabase: ReturnType<typeof getSupabaseServerClient> | null,
+  bcvRate: number | null
+): Promise<PlayStationSyncResult> {
+  const result: PlayStationSyncResult = {
+    success: false,
+    product: PSN_PRODUCT_NAME,
+    variant_id: PSN_VARIANT_ID,
+    provider: 'Eneba',
+    best_price_usd: null,
+    final_price_usd: null,
+    final_price_bs: null,
+    seller_name: null,
+    offer_url: null,
+  };
+  if (!supabase) {
+    result.error = 'Supabase no está disponible; no se pudo sincronizar el precio.';
+    return result;
+  }
+
+  let supplier = PSN_SUPPLIER;
+  try {
+    const { data: configuredSupplier, error: supplierConfigError } = await supabase
+      .from('product_supplier_urls')
+      .select('url')
+      .eq('variant_id', PSN_VARIANT_ID)
+      .eq('supplier', PSN_SUPPLIER.supplier)
+      .maybeSingle();
+    if (supplierConfigError) throw supplierConfigError;
+
+    if (configuredSupplier) {
+      supplier = { ...PSN_SUPPLIER, url: configuredSupplier.url };
+    } else {
+      const { error: saveSupplierError } = await supabase
+        .from('product_supplier_urls')
+        .upsert(
+          { variant_id: PSN_VARIANT_ID, supplier: PSN_SUPPLIER.supplier, url: PSN_SUPPLIER.url },
+          { onConflict: 'variant_id,supplier' }
+        );
+      if (saveSupplierError) throw saveSupplierError;
+    }
+  } catch (error) {
+    result.error = `No se pudo guardar la URL de Eneba: ${getErrorMessage(error, 'error desconocido')}`;
+    return result;
+  }
+
+  const checkedAt = new Date().toISOString();
+  let offer: SupplierOffer;
+  try {
+    offer = await fetchSupplierOffer(supplier);
+  } catch (error) {
+    const message = getErrorMessage(error, 'No se pudo leer la oferta de Eneba.');
+    try {
+      const { error: checkError } = await supabase
+        .from('supplier_price_checks')
+        .insert({
+          variant_id: PSN_VARIANT_ID,
+          supplier: PSN_SUPPLIER.supplier,
+          source_url: supplier.url,
+          price_usd: null,
+          final_price_usd: null,
+          seller_name: null,
+          offer_url: null,
+          error: message,
+          checked_at: checkedAt,
+        });
+      if (checkError) throw checkError;
+    } catch (saveError) {
+      console.error('[cron/test-steam][psn][offer-save] No se pudo guardar el resultado fallido:', saveError);
+    }
+    result.error = message;
+    return result;
+  }
+
+  const finalPriceUsd = Number((offer.priceUsd * (1 + PROFIT_MARGIN_PERCENT / 100)).toFixed(2));
+  const finalPriceBs = bcvRate === null ? null : Math.ceil(finalPriceUsd * bcvRate);
+  result.best_price_usd = offer.priceUsd;
+  result.final_price_usd = finalPriceUsd;
+  result.final_price_bs = finalPriceBs;
+  result.seller_name = offer.sellerName;
+  result.offer_url = offer.offerUrl;
+
+  try {
+    const { error: checkError } = await supabase
+      .from('supplier_price_checks')
+      .insert({
+        variant_id: PSN_VARIANT_ID,
+        supplier: PSN_SUPPLIER.supplier,
+        source_url: supplier.url,
+        price_usd: offer.priceUsd,
+        final_price_usd: finalPriceUsd,
+        seller_name: offer.sellerName,
+        offer_url: offer.offerUrl,
+        error: null,
+        checked_at: checkedAt,
+      });
+    if (checkError) throw checkError;
+  } catch (error) {
+    console.error('[cron/test-steam][psn][offer-save] Falló el historial de Eneba:', error);
+  }
+
+  try {
+    const { error: pricingError } = await supabase
+      .from('product_pricing')
+      .upsert({
+        variant_id: PSN_VARIANT_ID,
+        product_id: PSN_PRODUCT_ID,
+        profit_margin_percent: PROFIT_MARGIN_PERCENT,
+        category: PSN_CATEGORY,
+        platform: 'PlayStation',
+        stock: PSN_STOCK,
+        current_supplier: PSN_SUPPLIER.supplier,
+        current_seller_name: offer.sellerName,
+        current_offer_url: offer.offerUrl,
+        current_cost_usd: offer.priceUsd,
+        applied_margin_percent: PROFIT_MARGIN_PERCENT,
+        final_price_usd: finalPriceUsd,
+        ...(bcvRate !== null ? { bcv_rate: bcvRate, final_price_bs: finalPriceBs } : {}),
+        price_checked_at: checkedAt,
+        updated_at: checkedAt,
+      }, { onConflict: 'variant_id' });
+    if (pricingError) throw pricingError;
+  } catch (error) {
+    result.error = `No se pudo actualizar product_pricing: ${getErrorMessage(error, 'error desconocido')}`;
+    return result;
+  }
+
+  if (bcvRate === null) {
+    result.error = 'Se guardó el precio USD, pero no se pudo convertir a bolívares por falta de tasa BCV.';
+    return result;
+  }
+
+  result.success = true;
+  return result;
 }
 
 export async function GET(request: Request) {
@@ -268,8 +426,14 @@ export async function GET(request: Request) {
       console.error('[cron/test-steam][calculation] Sin comparación completa; no se calcula el precio final.');
     }
 
+    const playstation = await syncPlayStationPrice(supabase, bcvRate);
+    if (!playstation.success && playstation.error) {
+      errors.push(`${PSN_PRODUCT_NAME}: ${playstation.error}`);
+      console.error('[cron/test-steam][psn] No se pudo completar la sincronización:', playstation.error);
+    }
+
     return jsonResponse({
-      success: best !== null && bcvRate !== null && finalPriceBs !== null,
+      success: best !== null && bcvRate !== null && finalPriceBs !== null && playstation.success,
       bcv_rate: bcvRate,
       source: bcvRateSource,
       bcv_rate_stale: bcvRateIsStale,
@@ -282,6 +446,7 @@ export async function GET(request: Request) {
       profit_margin_percent: profitMarginPercent,
       final_price_usd: finalPriceUsd,
       final_price_bs: finalPriceBs,
+      playstation,
       comparisons: results.map((result) => ({
         provider: PROVIDER_NAMES[result.supplier],
         price_usd: result.price_usd,

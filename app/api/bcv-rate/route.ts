@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { refreshBcvRate } from '../../../lib/pricing/bcv';
 
 export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
 
 export async function GET(_request: Request) {

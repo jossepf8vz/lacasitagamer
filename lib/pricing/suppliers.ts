@@ -22,6 +22,7 @@ const PRICE_KEYS = ['price', 'priceUsd', 'salePrice', 'amount', 'priceAmount', '
 const CURRENCY_KEYS = ['currency', 'currencyCode', 'priceCurrency', 'currencyIsoCode'];
 const SELLER_KEYS = ['sellerName', 'merchantName', 'vendorName', 'seller', 'merchant', 'vendor', 'storeName'];
 const OFFER_URL_KEYS = ['offerUrl', 'listingUrl', 'productUrl', 'url', 'href'];
+const PROMOTION_MARKERS = /sponsor|featured|promoted|patrocin|destacad|cashback|cash_back|advert|coupon|voucher|promo.?code|discount.?code/i;
 
 function isAllowedSupplierUrl(supplier: SupplierName, input: string) {
   let url: URL;
@@ -83,9 +84,16 @@ function offerIsPromoted(value: unknown): boolean {
 
   for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
     const normalizedKey = key.toLowerCase();
-    if (/sponsor|featured|promoted|patrocin|destacad|cashback|cash_back|advert/i.test(normalizedKey)) {
+    if (PROMOTION_MARKERS.test(normalizedKey)) {
+      if (
+        /coupon|voucher|promo.?code|discount.?code/i.test(normalizedKey)
+        && nested !== null
+        && nested !== false
+        && nested !== 0
+        && nested !== ''
+      ) return true;
       if (nested === true || (typeof nested === 'number' && nested > 0)) return true;
-      if (typeof nested === 'string' && (/sponsor|featured|promoted|patrocin|destacad|cashback|advert/i.test(nested)
+      if (typeof nested === 'string' && (PROMOTION_MARKERS.test(nested)
         || /^(true|1|yes)$/i.test(nested.trim()))) {
         return true;
       }
@@ -106,7 +114,7 @@ function offerIsPromoted(value: unknown): boolean {
     }
     if (
       typeof nested === 'string'
-      && /sponsor|featured|promoted|patrocin|destacad|cashback|advert/i.test(nested)
+      && PROMOTION_MARKERS.test(nested)
     ) return true;
     if (offerIsPromoted(nested)) return true;
   }

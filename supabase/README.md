@@ -24,6 +24,12 @@ Las URLs solo se consultan en HTTPS y los hosts están limitados a `g2a.com`, `e
 - Binance P2P permanece privado; la tasa BCV se expone únicamente a través de la API pública utilizada por el banner.
 - `/api/cron/test-steam` agrega cada consulta a `supplier_price_checks` como historial; aplica la migración indicada arriba para permitir registros repetidos por variante/proveedor.
 
+## Sincronización de PlayStation Network Card
+
+Ejecuta `migrations/20261111123000_playstation_price_sync.sql` para registrar `v-ps10-us` (`g-psn-10`), el margen del 33%, la categoría `PlayStation / Gift Cards`, la plataforma `PlayStation`, el stock inicial y la URL de Eneba. La ruta existente `/api/cron/test-steam` procesa PSN y Steam en una misma ejecución y usa la tasa BCV compartida. Para PSN el parser selecciona la oferta USD válida de menor precio entre los vendedores de Eneba, excluyendo cashback, ofertas destacadas, anuncios y cupones; el precio final se guarda en `product_pricing` y el historial en `supplier_price_checks`.
+
+El catálogo muestra PlayStation Network Card $10 USD (USA) dentro de Gift Cards, con la variante `PlayStation` / `US Store`; el precio utiliza el snapshot sincronizado cuando está disponible.
+
 ## Ofertas de Steam Eneba/G2A
 
 1. Ejecuta `migrations/20261110140000_steam_offer_pricing.sql` y `migrations/20261110150000_steam_margin_33.sql` para guardar vendedor y enlace directo por oferta, el precio ganador, el margen aplicado y el total en Bs. La segunda migración fija el margen de `v-s10-glo` en 33%. La primera también fija las URLs públicas de Eneba y G2A para esa variante.
