@@ -26,11 +26,13 @@ Las URLs solo se consultan en HTTPS y los hosts están limitados a `g2a.com`, `e
 
 ## Sincronización de PlayStation Network Card
 
-Ejecuta `migrations/20261111123000_playstation_price_sync.sql` para registrar `v-ps10-us` (`g-psn-10`), el margen del 33%, la categoría `PlayStation / Gift Cards`, la plataforma `PlayStation`, el stock inicial y la URL de Eneba. La ruta existente `/api/cron/test-steam` procesa PSN y Steam en una misma ejecución y usa la tasa BCV compartida. Para PSN el parser selecciona la oferta USD válida de menor precio entre los vendedores de Eneba, excluyendo cashback, ofertas destacadas, anuncios y cupones; el precio final se guarda en `product_pricing` y el historial en `supplier_price_checks`.
+Ejecuta `migrations/20261111123000_playstation_price_sync.sql` para registrar `v-ps10-us` (`g-psn-10`), el margen del 33%, la categoría `PlayStation / Gift Cards`, la plataforma `PlayStation`, el stock inicial y la URL de Eneba. La ruta existente `/api/cron/test-steam` procesa PSN y Steam en una misma ejecución, junto con todas las variantes que tengan Eneba configurado. Para cada producto, el parser selecciona la oferta USD válida de menor precio entre los vendedores de Eneba, excluyendo cashback, ofertas destacadas, anuncios y cupones; el precio final se guarda en `product_pricing` y el historial en `supplier_price_checks`.
 
 El catálogo muestra PlayStation Network Card $10 USD (USA) dentro de Gift Cards, con la variante `PlayStation` / `US Store`; el precio utiliza el snapshot sincronizado cuando está disponible.
 
-Ejecuta `migrations/20261111150000_dynamic_tiered_pricing.sql` para retirar el trigger previo que fijaba el margen de Steam en 33% y permitir que Supabase guarde el margen escalonado calculado por el cron. Para todos los productos sincronizados, el cron aplica 33% si el costo base es menor a $20, 20% entre $20 y $49.99, y 8% desde $50, sin sumar el cargo de servicio. Guarda el precio final USD y la conversión BCV en Bs. redondeados a dos decimales, junto con el porcentaje aplicado.
+Ejecuta `migrations/20261111150000_dynamic_tiered_pricing.sql` para retirar el trigger previo que fijaba el margen de Steam en 33% y permitir que Supabase guarde el margen escalonado calculado por el cron. Para todos los productos sincronizados, el cron aplica 33% más un buffer de $0.40 si el costo base es menor a $20, 20% entre $20 y $49.99, y 8% desde $50. Guarda el precio final USD y la conversión BCV en Bs. redondeados a dos decimales, junto con el porcentaje aplicado.
+
+El cron consulta `https://www.bcv.org.ve/` directamente con `cache: no-store`; si el scraping falla, usa la última tasa disponible en Supabase y marca `bcv_rate_stale` en la respuesta. El JSON incluye `source: "bcv_official_scraping"`, `timestamp`, `products_updated` y el detalle de errores o advertencias.
 
 ## Ofertas de Steam Eneba/G2A
 
