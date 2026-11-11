@@ -74,6 +74,24 @@ function imageSignatureIsValid(type: string, bytes: Uint8Array) {
 }
 
 export async function POST(request: Request) {
+  const authorization = request.headers.get('authorization');
+  const accessToken = authorization?.match(/^Bearer\s+(.+)$/i)?.[1];
+  if (!accessToken) {
+    return NextResponse.json({ error: 'Verifica tu correo antes de registrar el pedido.' }, { status: 401, headers: noStoreHeaders });
+  }
+
+  let authenticatedEmail: string | undefined;
+  try {
+    const { data, error } = await getSupabaseServerClient().auth.getUser(accessToken);
+    if (error || !data.user?.email) {
+      return NextResponse.json({ error: 'La sesión de cliente no es válida o expiró.' }, { status: 401, headers: noStoreHeaders });
+    }
+    authenticatedEmail = data.user.email.toLowerCase();
+  } catch (error) {
+    console.error('[api/sales] No se pudo verificar la sesión del cliente.', error);
+    return NextResponse.json({ error: 'No se pudo verificar tu sesión.' }, { status: 500, headers: noStoreHeaders });
+  }
+
   const contentLength = Number(request.headers.get('content-length'));
   if (Number.isFinite(contentLength) && contentLength > MAX_FILE_BYTES + 64 * 1024) {
     return NextResponse.json({ error: 'El comprobante supera el tamaño máximo permitido.' }, { status: 413, headers: noStoreHeaders });
@@ -136,9 +154,10 @@ export async function POST(request: Request) {
     typeof email !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())
     || typeof name !== 'string' || name.trim().length < 2 || name.trim().length > 120
     || typeof phone !== 'string' || !/^[+0-9()\-\s]{7,25}$/.test(phone.trim())
+    || typeof email !== 'string' || email.trim().toLowerCase() !== authenticatedEmail
     || !paymentIsValid
     || typeof bankName !== 'string' || bankName.trim().length < 2 || bankName.trim().length > 100
-    || typeof reference !== 'string' || !/^[a-zA-Z0-9-]{3,80}$/.test(reference.trim())
+    || typeof reference !== 'string' || reference.trim().length < 3 || reference.trim().length > 80
     || !isUuid(orderId)
     || !validItems
     || !Number.isFinite(discount) || discount < 0

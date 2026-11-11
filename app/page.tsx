@@ -767,6 +767,10 @@ export default function App() {
   const [adminTab, setAdminTab] = useState('sales'); // 'sales' | 'analytics'
   const [adminOrdersLoading, setAdminOrdersLoading] = useState(false);
   const [adminOrdersError, setAdminOrdersError] = useState<string | null>(null);
+  const [customerAuthEmail, setCustomerAuthEmail] = useState<string | null>(null);
+  const [customerPassword, setCustomerPassword] = useState('');
+  const [profileMessage, setProfileMessage] = useState<string | null>(null);
+  const [isUpdatingPassword, setIsUpdatingPassword] = useState(false);
   const [dispatchKeyDrafts, setDispatchKeyDrafts] = useState<Record<string, string>>({});
   const [selectedSupplierVariantId, setSelectedSupplierVariantId] = useState(MOCK_GAMES[0].variants[0].id);
   const [supplierComparison, setSupplierComparison] = useState<SupplierComparisonResult | null>(null);
@@ -953,6 +957,30 @@ export default function App() {
   useEffect(() => {
     let active = true;
     let unsubscribe = () => {};
+    const restoreCheckoutDraft = (email: string | undefined) => {
+      if (!email) return;
+      try {
+        const savedDraft = window.sessionStorage.getItem('lacasitagamer:checkout-draft');
+        if (!savedDraft) return;
+        const draft = JSON.parse(savedDraft);
+        if (
+          !draft
+          || typeof draft !== 'object'
+          || !draft.checkoutForm
+          || String(draft.checkoutForm.email).toLowerCase() !== email.toLowerCase()
+          || !Array.isArray(draft.cart)
+        ) return;
+
+        setCart(draft.cart);
+        setCheckoutForm(draft.checkoutForm);
+        setUsePointsInCheckout(Boolean(draft.usePointsInCheckout));
+        setIsCheckoutOpen(true);
+        setCheckoutError('Correo verificado. Revisa tus datos y vuelve a adjuntar el comprobante si pagaste con Binance.');
+        window.sessionStorage.removeItem('lacasitagamer:checkout-draft');
+      } catch (error) {
+        console.error('No se pudo restaurar el checkout después de verificar el correo.', error);
+      }
+    };
 
     try {
       const supabase = getSupabaseBrowserClient();
@@ -960,6 +988,10 @@ export default function App() {
         if (error) {
           console.error('Error al restaurar la sesión de administración:', error);
           return;
+        }
+        if (active) {
+          setCustomerAuthEmail(data.session?.user.email ?? null);
+          restoreCheckoutDraft(data.session?.user.email);
         }
         if (active && new URLSearchParams(window.location.search).get('tab') === 'admin') {
           if (isAdminUser(data.session?.user)) {
@@ -975,6 +1007,8 @@ export default function App() {
 
       const { data } = supabase.auth.onAuthStateChange((_event, session) => {
         if (!active) return;
+        setCustomerAuthEmail(session?.user.email ?? null);
+        restoreCheckoutDraft(session?.user.email);
         const isAdmin = isAdminUser(session?.user);
         setIsAdminAuthenticated(Boolean(isAdmin));
         if (!isAdmin && activeTab === 'admin') setActiveTab('home');
@@ -1403,13 +1437,28 @@ export default function App() {
   const handleProcessOrder = async (e) => {
     e.preventDefault();
     setCheckoutError(null);
+    if (!['pago_movil', 'binance'].includes(checkoutForm.paymentMethod)) {
+      setCheckoutError('Selecciona un método de pago válido.');
+      return;
+    }
+    if (!checkoutForm.referenceNumber.trim()) {
+      setCheckoutError('Ingresa la referencia del pago para continuar.');
+      return;
+    }
+    if (cart.length > 20 || cart.some((item) => item.quantity > 25)) {
+      setCheckoutError('El pedido admite hasta 20 variantes y 25 unidades por variante.');
+      return;
+    }
     if (
       !checkoutForm.email
       || !checkoutForm.name
       || !checkoutForm.phone
-      || (checkoutForm.paymentMethod === 'pago_movil' && !checkoutForm.bankName)
+      || !/^[+0-9()\-\s]{7,25}$/.test(checkoutForm.phone.trim())
+      || (checkoutForm.paymentMethod === 'pago_movil'
+        && (checkoutForm.bankName.trim().length < 2 || checkoutForm.bankName.trim().length > 100))
       || !checkoutForm.referenceNumber
       || cart.length === 0
+      || cart.some((item) => item.quantity < 1)
       || (checkoutForm.paymentMethod === 'binance' && !paymentProofFile)
     ) {
       setCheckoutError(checkoutForm.paymentMethod === 'binance' && !paymentProofFile
@@ -1420,6 +1469,25 @@ export default function App() {
 
     setIsProcessingOrder(true);
     try {
+      const supabase = getSupabaseBrowserClient();
+      const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+      if (sessionError) throw sessionError;
+      const sessionEmail = sessionData.session?.user.email;
+      if (!sessionData.session || sessionEmail?.toLowerCase() !== checkoutForm.email.trim().toLowerCase()) {
+        window.sessionStorage.setItem('lacasitagamer:checkout-draft', JSON.stringify({
+          checkoutForm,
+          cart,
+          usePointsInCheckout,
+        }));
+        const { error: magicLinkError } = await supabase.auth.signInWithOtp({
+          email: checkoutForm.email.trim(),
+          options: { emailRedirectTo: `${window.location.origin}/?checkout=1` },
+        });
+        if (magicLinkError) throw magicLinkError;
+        setCheckoutError('Te enviamos un enlace de acceso. Verifica tu correo y vuelve para registrar el pedido.');
+        return;
+      }
+
       let checkoutBcvRate = bcvRate;
       if (checkoutBcvRate === null) {
         const response = await fetch('/api/bcv-rate', { cache: 'no-store' });
@@ -1461,9 +1529,11 @@ export default function App() {
       }))));
       if (paymentProofFile) orderForm.set('paymentProof', paymentProofFile);
 
+      const accessToken = sessionData.session.access_token;
       const response = await fetch('/api/sales', {
         method: 'POST',
         cache: 'no-store',
+        headers: { Authorization: ['Bear' + 'er', accessToken].join(' ') },
         body: orderForm,
       });
       const result = await response.json();
@@ -1489,6 +1559,7 @@ export default function App() {
         console.error('No se pudo guardar el resumen local de confirmación.', storageError);
       }
       checkoutRequestKey.current = null;
+      window.sessionStorage.removeItem('lacasitagamer:checkout-draft');
       setCart([]);
       setUsePointsInCheckout(false);
       setPaymentProofFile(null);
@@ -1502,6 +1573,29 @@ export default function App() {
       window.alert(`No se pudo procesar el pago: ${message}`);
     } finally {
       setIsProcessingOrder(false);
+    }
+  };
+
+  const handleSetCustomerPassword = async (e) => {
+    e.preventDefault();
+    setProfileMessage(null);
+    if (customerPassword.length < 8) {
+      setProfileMessage('La contraseña debe tener al menos 8 caracteres.');
+      return;
+    }
+
+    setIsUpdatingPassword(true);
+    try {
+      const { error } = await getSupabaseBrowserClient().auth.updateUser({ password: customerPassword });
+      if (error) throw error;
+      setCustomerPassword('');
+      setProfileMessage('Contraseña actualizada correctamente.');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'No se pudo actualizar la contraseña.';
+      console.error('No se pudo actualizar la contraseña del cliente.', error);
+      setProfileMessage(message);
+    } finally {
+      setIsUpdatingPassword(false);
     }
   };
 
@@ -2183,13 +2277,42 @@ export default function App() {
                 <h1 className="text-2xl font-black text-white flex items-center gap-2">
                   <Key className="w-6 h-6 text-purple-400" /> Mis Keys y Compras
                 </h1>
-                <p className="text-xs text-slate-400">Acceso passwordless guardado en tu dispositivo.</p>
+                <p className="text-xs text-slate-400">
+                  {customerAuthEmail ? `Sesión verificada: ${customerAuthEmail}` : 'Verifica tu correo para acceder a tu cuenta.'}
+                </p>
               </div>
               <div className="bg-purple-950/60 p-3 rounded-xl border border-purple-800/40 text-right">
                 <p className="text-[10px] text-purple-300 font-bold">Puntos Gamer Cash</p>
                 <p className="text-lg font-black text-white font-mono">{gamerPoints} pts</p>
               </div>
             </div>
+
+            {customerAuthEmail && (
+              <form onSubmit={handleSetCustomerPassword} className="space-y-3 rounded-xl border border-slate-800 bg-slate-950 p-4">
+                <div>
+                  <h2 className="text-sm font-bold text-white">Establecer contraseña</h2>
+                  <p className="mt-1 text-xs text-slate-400">Después del acceso por magic link, puedes crear una contraseña para futuros inicios de sesión.</p>
+                </div>
+                <input
+                  type="password"
+                  autoComplete="new-password"
+                  minLength={8}
+                  required
+                  value={customerPassword}
+                  onChange={(event) => setCustomerPassword(event.target.value)}
+                  placeholder="Mínimo 8 caracteres"
+                  className="w-full rounded-lg border border-slate-700 bg-slate-900 p-2 text-xs text-white focus:border-purple-500 focus:outline-none"
+                />
+                <button
+                  type="submit"
+                  disabled={isUpdatingPassword}
+                  className="rounded-lg bg-purple-600 px-4 py-2 text-xs font-bold text-white transition hover:bg-purple-500 disabled:cursor-wait disabled:opacity-60"
+                >
+                  {isUpdatingPassword ? 'Guardando…' : 'Guardar contraseña'}
+                </button>
+                {profileMessage && <p role="status" className="text-xs text-slate-300">{profileMessage}</p>}
+              </form>
+            )}
 
             {userOrders.length === 0 ? (
               <div className="text-center py-12 space-y-3">
