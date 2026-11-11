@@ -92,7 +92,7 @@ async function resolveBcvRate(supabase: ReturnType<typeof getSupabaseServerClien
         const { error } = await supabase
           .from('exchange_rates')
           .upsert(
-            { currency: 'USD', source: 'bcv_official_ves', rate, updated_at: new Date().toISOString() },
+            { currency: 'USD', rate, updated_at: new Date().toISOString() },
             { onConflict: 'currency' }
           );
         if (error) throw error;
