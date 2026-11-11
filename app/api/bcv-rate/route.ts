@@ -2,10 +2,9 @@ import { NextResponse } from 'next/server';
 import { refreshBcvRate } from '../../../lib/pricing/bcv';
 
 export const runtime = 'nodejs';
-export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
 
-export async function GET() {
+export async function GET(_request: Request) {
   try {
     const result = await refreshBcvRate();
     return NextResponse.json(result, { headers: { 'Cache-Control': 'no-store' } });

@@ -3,6 +3,8 @@ import { getSupabaseServerClient } from '../supabase/server';
 const MONTOSVE_RATES_URL = 'https://api.montosve.com/v1/tasas/actual';
 const BCV_RATE_SOURCE = 'bcv_official_ves';
 const SOURCE_TIMEOUT_MS = 6000;
+const BCV_RATE_CACHE_SECONDS = 12 * 60 * 60;
+const BCV_RATE_CACHE_MS = BCV_RATE_CACHE_SECONDS * 1000;
 const STEAM_VARIANT_ID = 'v-s10-glo';
 
 type PricingRow = {
@@ -24,6 +26,26 @@ type PersistResult = {
 
 export async function refreshBcvRate() {
   const sourceErrors: string[] = [];
+  let storedRate: StoredRate | null = null;
+  let storedRateReadError: unknown = null;
+
+  try {
+    storedRate = await getStoredBcvRate();
+    if (storedRate && isFreshStoredRate(storedRate)) {
+      return {
+        success: true as const,
+        ...storedRate,
+        bcv_rate: storedRate.rate,
+        stale: false,
+        persisted: true,
+        cached: true,
+      };
+    }
+  } catch (error) {
+    storedRateReadError = error;
+    console.error('[bcv][stored-rate] Falló la lectura de la tasa almacenada:', error);
+  }
+
   try {
     const rate = await fetchMontosveRate(process.env.MONTOSVE_API_KEY || '');
     const persisted = await persistBcvRate(rate);
@@ -43,33 +65,46 @@ export async function refreshBcvRate() {
     console.error('Error fetching MontosVE:', error);
   }
 
-  try {
-    const storedRate = await getStoredBcvRate();
-    if (storedRate) {
-      console.warn(`[bcv][fallback:${storedRate.source}] Se usará la última tasa válida guardada.`);
-      return {
-        success: true as const,
-        ...storedRate,
-        bcv_rate: storedRate.rate,
-        stale: true,
-        persisted: true,
-        warning: [
-          'MontosVE no respondió; se devuelve la última tasa válida guardada en Supabase.',
-          ...sourceErrors,
-        ].join(' '),
-      };
+  if (!storedRate) {
+    try {
+      storedRate = await getStoredBcvRate();
+    } catch (error) {
+      storedRateReadError = error;
+      console.error('[bcv][stored-rate] Falló la lectura de la tasa de respaldo en Supabase:', error);
     }
-  } catch (error) {
-    const message = errorMessage(error);
-    console.error('[bcv][stored-rate] Falló la lectura de la tasa de respaldo en Supabase:', error);
+  }
+
+  if (storedRate) {
+    console.warn(`[bcv][fallback:${storedRate.source}] Se usará la última tasa válida guardada.`);
+    return {
+      success: true as const,
+      ...storedRate,
+      bcv_rate: storedRate.rate,
+      stale: true,
+      persisted: true,
+      warning: [
+        'MontosVE no respondió; se devuelve la última tasa válida guardada en Supabase.',
+        ...sourceErrors,
+      ].join(' '),
+    };
+  }
+
+  if (storedRateReadError) {
     throw new Error(
-      `Fallaron las fuentes BCV (${sourceErrors.join('; ')}) y la lectura de Supabase (${message}).`
+      `Fallaron las fuentes BCV (${sourceErrors.join('; ')}) y la lectura de Supabase (${errorMessage(storedRateReadError)}).`
     );
   }
 
   throw new Error(
     `Fallaron las fuentes BCV (${sourceErrors.join('; ')}) y no existe una tasa válida guardada en Supabase.`
   );
+}
+
+function isFreshStoredRate(storedRate: StoredRate) {
+  if (!storedRate.updatedAt) return false;
+  const updatedAt = Date.parse(storedRate.updatedAt);
+  const age = Date.now() - updatedAt;
+  return Number.isFinite(updatedAt) && age >= 0 && age < BCV_RATE_CACHE_MS;
 }
 
 export async function getStoredBcvRate(): Promise<StoredRate | null> {
@@ -158,7 +193,7 @@ async function fetchMontosveRate(apiKey: string) {
 
   try {
     const response = await fetch(MONTOSVE_RATES_URL, {
-      cache: 'no-store',
+      next: { revalidate: BCV_RATE_CACHE_SECONDS },
       headers: {
         Accept: 'application/json',
         'X-API-Key': apiKey,
