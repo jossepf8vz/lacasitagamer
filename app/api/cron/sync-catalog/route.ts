@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { fetchSupplierOffer } from '../../../../lib/pricing/suppliers';
+import { fetchSupplierPrice } from '../../../../lib/pricing/suppliers';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -98,16 +98,16 @@ export async function GET(request: Request) {
         throw new Error(`No hay una URL válida de Eneba configurada para ${variantId}.`);
       }
 
-      const supplierOffer = await fetchSupplierOffer({
+      const costUsd = await fetchSupplierPrice({
         supplier: 'eneba',
         url: supplierConfig.url,
       });
 
       return {
         variant_id: variantId,
-        cost_usd: supplierOffer.priceUsd,
+        cost_usd: costUsd,
         supplier: 'eneba',
-        seller_name: supplierOffer.sellerName,
+        seller_name: null,
         offer_url: supplierConfig.url,
       };
     }));
