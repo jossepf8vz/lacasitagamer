@@ -11,6 +11,35 @@ export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 export const maxDuration = 30;
 
+const ENEBA_CATALOG_PRODUCTS = [
+  {
+    variant_id: 'v-ps75-us',
+    url: 'https://www.eneba.com/latam/psn-playstation-network-card-75-usd-usa-psn-key-united-states',
+  },
+  {
+    variant_id: 'v-ps5-us',
+    url: 'https://www.eneba.com/latam/psn-playstation-network-card-5-usd-usa-psn-key-united-states',
+  },
+] as const;
+
+type SupplierPriceInput = {
+  variant_id: string;
+  cost_usd: number;
+  supplier: 'eneba';
+  seller_name: null;
+  offer_url: string;
+};
+
+type SyncedSupplierPrice = {
+  variant_id: string;
+  current_cost_usd: number;
+  final_price_usd: number;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 function parseBcvRate(value: unknown): number | null {
   const rate = typeof value === 'number'
     ? value
@@ -18,6 +47,60 @@ function parseBcvRate(value: unknown): number | null {
       ? Number(value.trim().replace(',', '.'))
       : NaN;
   return Number.isFinite(rate) && rate >= 1 && rate <= 10000 ? rate : null;
+}
+
+function verifySyncedSupplierPrices(
+  value: unknown,
+  supplierPrices: SupplierPriceInput[]
+): SyncedSupplierPrice[] {
+  if (
+    !isRecord(value)
+    || value.success !== true
+    || !Array.isArray(value.products)
+  ) {
+    throw new Error('Supabase no confirmó la sincronización de precios del catálogo.');
+  }
+
+  const products = value.products;
+  return supplierPrices.map((supplierPrice) => {
+    const syncedProduct = products.find((product) => (
+      typeof product === 'object'
+      && product !== null
+      && !Array.isArray(product)
+      && 'variant_id' in product
+      && product.variant_id === supplierPrice.variant_id
+    ));
+
+    if (
+      typeof syncedProduct !== 'object'
+      || syncedProduct === null
+      || !('best_price_usd' in syncedProduct)
+      || typeof syncedProduct.best_price_usd !== 'number'
+      || !('final_price_usd' in syncedProduct)
+      || typeof syncedProduct.final_price_usd !== 'number'
+    ) {
+      throw new Error(`Supabase no devolvió los precios sincronizados para ${supplierPrice.variant_id}.`);
+    }
+
+    const marginMultiplier = supplierPrice.cost_usd < 20
+      ? 1.33
+      : supplierPrice.cost_usd < 50
+        ? 1.20
+        : 1.08;
+    const expectedFinalUsd = Number((supplierPrice.cost_usd * marginMultiplier).toFixed(2));
+    if (
+      Math.round(syncedProduct.best_price_usd * 100) !== Math.round(supplierPrice.cost_usd * 100)
+      || Math.round(syncedProduct.final_price_usd * 100) !== Math.round(expectedFinalUsd * 100)
+    ) {
+      throw new Error(`El precio confirmado por Supabase no coincide con el costo y margen esperados para ${supplierPrice.variant_id}.`);
+    }
+
+    return {
+      variant_id: supplierPrice.variant_id,
+      current_cost_usd: syncedProduct.best_price_usd,
+      final_price_usd: syncedProduct.final_price_usd,
+    };
+  });
 }
 
 export async function GET(request: Request) {
@@ -81,34 +164,18 @@ export async function GET(request: Request) {
       );
     }
 
-    const supplierPrices = await Promise.all(['v-ps75-us', 'v-ps5-us'].map(async (variantId) => {
-      const { data: supplierConfig, error: supplierConfigError } = await supabase
-        .from('product_supplier_urls')
-        .select('supplier, url')
-        .eq('variant_id', variantId)
-        .eq('supplier', 'eneba')
-        .maybeSingle();
-
-      if (supplierConfigError) throw supplierConfigError;
-      if (
-        !supplierConfig
-        || supplierConfig.supplier !== 'eneba'
-        || typeof supplierConfig.url !== 'string'
-      ) {
-        throw new Error(`No hay una URL válida de Eneba configurada para ${variantId}.`);
-      }
-
+    const supplierPrices: SupplierPriceInput[] = await Promise.all(ENEBA_CATALOG_PRODUCTS.map(async (product) => {
       const costUsd = await fetchSupplierPrice({
         supplier: 'eneba',
-        url: supplierConfig.url,
+        url: product.url,
       });
 
       return {
-        variant_id: variantId,
+        variant_id: product.variant_id,
         cost_usd: costUsd,
         supplier: 'eneba',
         seller_name: null,
-        offer_url: supplierConfig.url,
+        offer_url: product.url,
       };
     }));
 
@@ -119,11 +186,13 @@ export async function GET(request: Request) {
     });
 
     if (rpcError) throw rpcError;
+    const syncedSupplierPrices = verifySyncedSupplierPrices(data, supplierPrices);
 
     return NextResponse.json({
       success: true,
       bcv_rate: bcvRate,
       supabase_response: data,
+      supplier_prices_synced: syncedSupplierPrices,
       message: 'Sincronización completada exitosamente sin el fee de $0.40 en vitrina.',
     });
   } catch (err: any) {
