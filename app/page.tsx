@@ -99,6 +99,18 @@ const MOCK_GAMES = [
     ]
   },
   {
+    id: "g-psn-75",
+    title: "PlayStation Network Card $75 USD (USA)",
+    slug: "playstation-network-card-75-usd-usa",
+    category: "Gift Cards",
+    coverImage: "https://images.unsplash.com/photo-1606813907291-d86efa9b94db?auto=format&fit=crop&q=80&w=600",
+    description: "Tarjeta prepagada de $75 USD para cuentas PlayStation Store Estados Unidos.",
+    priceHistory30d: { lowest: 78.17, highest: 78.17, isLowest30d: false },
+    variants: [
+      { id: "v-ps75-us", platform: "PlayStation", region: "US Store", priceUsd: 78.17, stock: 25 }
+    ]
+  },
+  {
     id: "g-nin-10",
     title: "Nintendo eShop Card $10 USD",
     slug: "nintendo-eshop-card-10-usd",
@@ -576,7 +588,7 @@ const MOCK_GAMES = [
   }
 ];
 
-const STORE_CATALOG = MOCK_GAMES.filter((game) => ['g-steam-10', 'g-psn-10'].includes(game.id));
+const STORE_CATALOG = MOCK_GAMES.filter((game) => ['g-steam-10', 'g-psn-10', 'g-psn-75'].includes(game.id));
 
 const CATEGORIES = [
   { name: 'Todos', icon: Gamepad2, color: 'from-violet-500 to-purple-600' },

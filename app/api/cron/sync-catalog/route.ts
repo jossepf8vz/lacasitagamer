@@ -1,9 +1,15 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { fetchSupplierOffer } from '../../../../lib/pricing/suppliers';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 const supabase = createClient(supabaseUrl, supabaseServiceKey);
+
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+export const maxDuration = 30;
 
 function parseBcvRate(value: unknown): number | null {
   const rate = typeof value === 'number'
@@ -75,9 +81,37 @@ export async function GET(request: Request) {
       );
     }
 
+    const variantId = 'v-ps75-us';
+    const { data: supplierConfig, error: supplierConfigError } = await supabase
+      .from('product_supplier_urls')
+      .select('supplier, url')
+      .eq('variant_id', variantId)
+      .eq('supplier', 'eneba')
+      .maybeSingle();
+
+    if (supplierConfigError) throw supplierConfigError;
+    if (
+      !supplierConfig
+      || supplierConfig.supplier !== 'eneba'
+      || typeof supplierConfig.url !== 'string'
+    ) {
+      throw new Error(`No hay una URL válida de Eneba configurada para ${variantId}.`);
+    }
+
+    const supplierOffer = await fetchSupplierOffer({
+      supplier: 'eneba',
+      url: supplierConfig.url,
+    });
+
     const { data, error: rpcError } = await supabase.rpc('sync_exchange_rate_and_recalculate_catalog', {
       p_bcv_rate: bcvRate,
-      p_supplier_prices: [],
+      p_supplier_prices: [{
+        variant_id: variantId,
+        cost_usd: supplierOffer.priceUsd,
+        supplier: 'eneba',
+        seller_name: supplierOffer.sellerName,
+        offer_url: supplierConfig.url,
+      }],
       p_updated_at: new Date().toISOString(),
     });
 
