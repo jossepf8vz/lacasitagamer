@@ -81,37 +81,40 @@ export async function GET(request: Request) {
       );
     }
 
-    const variantId = 'v-ps75-us';
-    const { data: supplierConfig, error: supplierConfigError } = await supabase
-      .from('product_supplier_urls')
-      .select('supplier, url')
-      .eq('variant_id', variantId)
-      .eq('supplier', 'eneba')
-      .maybeSingle();
+    const supplierPrices = await Promise.all(['v-ps75-us', 'v-ps5-us'].map(async (variantId) => {
+      const { data: supplierConfig, error: supplierConfigError } = await supabase
+        .from('product_supplier_urls')
+        .select('supplier, url')
+        .eq('variant_id', variantId)
+        .eq('supplier', 'eneba')
+        .maybeSingle();
 
-    if (supplierConfigError) throw supplierConfigError;
-    if (
-      !supplierConfig
-      || supplierConfig.supplier !== 'eneba'
-      || typeof supplierConfig.url !== 'string'
-    ) {
-      throw new Error(`No hay una URL válida de Eneba configurada para ${variantId}.`);
-    }
+      if (supplierConfigError) throw supplierConfigError;
+      if (
+        !supplierConfig
+        || supplierConfig.supplier !== 'eneba'
+        || typeof supplierConfig.url !== 'string'
+      ) {
+        throw new Error(`No hay una URL válida de Eneba configurada para ${variantId}.`);
+      }
 
-    const supplierOffer = await fetchSupplierOffer({
-      supplier: 'eneba',
-      url: supplierConfig.url,
-    });
+      const supplierOffer = await fetchSupplierOffer({
+        supplier: 'eneba',
+        url: supplierConfig.url,
+      });
 
-    const { data, error: rpcError } = await supabase.rpc('sync_exchange_rate_and_recalculate_catalog', {
-      p_bcv_rate: bcvRate,
-      p_supplier_prices: [{
+      return {
         variant_id: variantId,
         cost_usd: supplierOffer.priceUsd,
         supplier: 'eneba',
         seller_name: supplierOffer.sellerName,
         offer_url: supplierConfig.url,
-      }],
+      };
+    }));
+
+    const { data, error: rpcError } = await supabase.rpc('sync_exchange_rate_and_recalculate_catalog', {
+      p_bcv_rate: bcvRate,
+      p_supplier_prices: supplierPrices,
       p_updated_at: new Date().toISOString(),
     });
 
