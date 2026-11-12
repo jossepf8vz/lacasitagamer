@@ -5,6 +5,15 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
+function parseBcvRate(value: unknown): number | null {
+  const rate = typeof value === 'number'
+    ? value
+    : typeof value === 'string'
+      ? Number(value.trim().replace(',', '.'))
+      : NaN;
+  return Number.isFinite(rate) && rate >= 1 && rate <= 10000 ? rate : null;
+}
+
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const token = searchParams.get('token');
@@ -20,9 +29,51 @@ export async function GET(request: Request) {
   }
 
   try {
-    const bcvRes = await fetch('https://pyd-monedasve.vercel.app/api/v1/latest');
-    const bcvData = await bcvRes.json();
-    const bcvRate = bcvData?.rates?.USD || bcvData?.USD || 904.4485;
+    let bcvRate = 904.4485;
+
+    const { data: currentRate, error: rateError } = await supabase
+      .from('exchange_rates')
+      .select('rate')
+      .eq('currency', 'USD')
+      .maybeSingle();
+
+    if (rateError) {
+      console.warn('[cron/sync-catalog] No se pudo leer exchange_rates; se conservará el respaldo:', rateError);
+    } else {
+      const storedRate = parseBcvRate(currentRate?.rate);
+      if (storedRate !== null) {
+        bcvRate = storedRate;
+      } else if (currentRate) {
+        console.warn('[cron/sync-catalog] La tasa almacenada no es válida; se conservará el respaldo.');
+      }
+    }
+
+    try {
+      const bcvRes = await fetch('https://pyd-monedasve.vercel.app/api/v1/latest', { cache: 'no-store' });
+      if (!bcvRes.ok) {
+        throw new Error(`MontosVE respondió con HTTP ${bcvRes.status}.`);
+      }
+
+      const bcvData: unknown = await bcvRes.json();
+      if (typeof bcvData === 'object' && bcvData !== null && !Array.isArray(bcvData)) {
+        const payload = bcvData as Record<string, unknown>;
+        const rates = typeof payload.rates === 'object' && payload.rates !== null && !Array.isArray(payload.rates)
+          ? payload.rates as Record<string, unknown>
+          : null;
+        const externalRate = parseBcvRate(rates?.USD ?? payload.USD);
+        if (externalRate !== null) {
+          bcvRate = externalRate;
+        } else {
+          console.warn('[cron/sync-catalog] MontosVE no devolvió una tasa USD válida; se usará la tasa de respaldo.');
+        }
+      } else {
+        console.warn('[cron/sync-catalog] MontosVE devolvió un formato inválido; se usará la tasa de respaldo.');
+      }
+    } catch (externalError: any) {
+      console.warn(
+        `[cron/sync-catalog] Falló la consulta a MontosVE; se usará la tasa de respaldo: ${externalError?.message ?? String(externalError)}`
+      );
+    }
 
     const { data, error: rpcError } = await supabase.rpc('sync_exchange_rate_and_recalculate_catalog', {
       p_bcv_rate: bcvRate,
@@ -36,7 +87,7 @@ export async function GET(request: Request) {
       success: true,
       bcv_rate: bcvRate,
       supabase_response: data,
-      message: 'Catálogo sincronizado exitosamente sin el fee de $0.40 en vitrina.',
+      message: 'Sincronización completada exitosamente sin el fee de $0.40 en vitrina.',
     });
   } catch (err: any) {
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });
