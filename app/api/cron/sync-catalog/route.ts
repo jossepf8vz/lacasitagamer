@@ -90,6 +90,15 @@ function jsonResponse(body: Record<string, unknown>, status = 200) {
   });
 }
 
+function parseBcvRate(value: unknown): number | null {
+  const rate = typeof value === 'number'
+    ? value
+    : typeof value === 'string'
+      ? Number(value.trim().replace(',', '.'))
+      : NaN;
+  return Number.isFinite(rate) && rate >= 1 && rate <= 10000 ? rate : null;
+}
+
 export async function GET(request: Request) {
   const cronSecret = process.env.CRON_SECRET;
   const token = new URL(request.url).searchParams.get('token');
@@ -101,8 +110,43 @@ export async function GET(request: Request) {
   }
 
   const timestamp = new Date().toISOString();
+  let bcvRate: number | null = null;
+  let source = 'monedasve_api';
   try {
-    const bcvRate = await fetchMontosveRate(process.env.MONTOSVE_API_KEY || '');
+    try {
+      bcvRate = await fetchMontosveRate(process.env.MONTOSVE_API_KEY || '');
+    } catch (montosveError: any) {
+      const montosveMessage = montosveError?.message ?? String(montosveError);
+      console.warn('[cron/sync-catalog] MontosVE falló; se intentará usar exchange_rates:', montosveError);
+
+      try {
+        const fallbackClient = getSupabaseServerClient();
+        const { data, error } = await fallbackClient
+          .from('exchange_rates')
+          .select('rate')
+          .eq('currency', 'USD')
+          .order('updated_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (error) throw error;
+        bcvRate = parseBcvRate(data?.rate);
+        if (bcvRate === null) {
+          throw new Error('No existe una tasa USD válida en exchange_rates.');
+        }
+        source = 'supabase:exchange_rates';
+      } catch (fallbackError: any) {
+        const fallbackMessage = fallbackError?.message ?? String(fallbackError);
+        throw new Error(
+          `MontosVE falló: ${montosveMessage}. No se pudo obtener una tasa válida de respaldo de exchange_rates: ${fallbackMessage}`
+        );
+      }
+    }
+
+    if (bcvRate === null) {
+      throw new Error('No se pudo obtener una tasa BCV válida de MontosVE ni de exchange_rates.');
+    }
+
     const supabase = getSupabaseServerClient();
     const { data, error } = await supabase.rpc('sync_exchange_rate_and_recalculate_catalog', {
       p_bcv_rate: bcvRate,
@@ -113,28 +157,27 @@ export async function GET(request: Request) {
     if (error) throw error;
     const summary = parseSyncSummary(data);
     if (summary.bcv_rate !== bcvRate) {
-      throw new Error('La tasa confirmada por Supabase no coincide con la tasa obtenida de MontosVE.');
+      throw new Error('La tasa confirmada por Supabase no coincide con la tasa BCV utilizada.');
     }
 
     return jsonResponse({
       success: true,
       bcv_rate: summary.bcv_rate,
-      source: 'monedasve_api',
+      source,
       timestamp: summary.updated_at,
       products_updated: summary.products_updated,
       products: summary.products,
     });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Error desconocido durante la sincronización.';
-    console.error('[cron/sync-catalog] Falló la sincronización atómica del catálogo:', error);
+  } catch (err: any) {
+    console.error('[cron/sync-catalog] Falló la sincronización atómica del catálogo:', err);
     return jsonResponse({
       success: false,
-      bcv_rate: null,
-      source: 'monedasve_api',
+      bcv_rate: bcvRate,
+      source,
       timestamp,
       products_updated: 0,
       products: [],
-      error: message,
+      error: err?.message ?? String(err),
     }, 502);
   }
 }
